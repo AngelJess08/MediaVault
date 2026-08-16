@@ -2,6 +2,7 @@ package com.mediavault.app.ui.library
 
 import android.content.Intent
 import android.net.Uri
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -23,14 +24,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavHostController
-import coil.compose.AsyncImage
 import com.mediavault.app.navigation.Screen
 import com.mediavault.storage.db.entity.DownloadEntity
 
@@ -47,7 +46,7 @@ fun LibraryScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Biblioteca y Archivos", fontWeight = FontWeight.Bold) },
+                title = { Text("Biblioteca e Historial", fontWeight = FontWeight.Bold) },
                 actions = {
                     IconButton(onClick = { viewModel.toggleViewMode() }) {
                         Icon(
@@ -69,7 +68,7 @@ fun LibraryScreen(
             OutlinedTextField(
                 value = uiState.searchQuery,
                 onValueChange = { viewModel.setSearchQuery(it) },
-                placeholder = { Text("Buscar en biblioteca...") },
+                placeholder = { Text("Buscar por título o autor...") },
                 leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
                 trailingIcon = {
                     if (uiState.searchQuery.isNotEmpty()) {
@@ -147,7 +146,7 @@ fun LibraryScreen(
                         )
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
-                            text = "No se encontraron archivos",
+                            text = "No se encontraron descargas",
                             style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -164,13 +163,7 @@ fun LibraryScreen(
                         items(downloads, key = { it.id }) { item ->
                             LibraryGridItem(
                                 item = item,
-                                onClick = { openPlayer(navController, item) },
-                                onToggleFavorite = { viewModel.toggleFavorite(item) },
-                                onMoveToTrash = { viewModel.moveToTrash(item.id) },
-                                onRestore = { viewModel.restoreFromTrash(item.id) },
-                                onPermanentDelete = { viewModel.permanentDelete(item.id) },
-                                onShare = { shareMedia(context, item) },
-                                onUpscale = { navController.navigate(Screen.Upscale.route) }
+                                onClick = { openPlayer(navController, item) }
                             )
                         }
                     }
@@ -188,6 +181,10 @@ fun LibraryScreen(
                                 onRestore = { viewModel.restoreFromTrash(item.id) },
                                 onPermanentDelete = { viewModel.permanentDelete(item.id) },
                                 onShare = { shareMedia(context, item) },
+                                onReDownload = {
+                                    viewModel.reDownload(item)
+                                    Toast.makeText(context, "Re-descarga iniciada", Toast.LENGTH_SHORT).show()
+                                },
                                 onUpscale = { navController.navigate(Screen.Upscale.route) }
                             )
                         }
@@ -225,6 +222,7 @@ fun LibraryListItem(
     onRestore: () -> Unit,
     onPermanentDelete: () -> Unit,
     onShare: () -> Unit,
+    onReDownload: () -> Unit,
     onUpscale: () -> Unit
 ) {
     var showMenu by remember { mutableStateOf(false) }
@@ -282,6 +280,11 @@ fun LibraryListItem(
                         leadingIcon = { Icon(Icons.Filled.Share, contentDescription = null) },
                         onClick = { showMenu = false; onShare() }
                     )
+                    DropdownMenuItem(
+                        text = { Text("Re-descargar") },
+                        leadingIcon = { Icon(Icons.Filled.Refresh, contentDescription = null) },
+                        onClick = { showMenu = false; onReDownload() }
+                    )
                     if (item.type == "VIDEO" && !item.inTrash) {
                         DropdownMenuItem(
                             text = { Text("Escalar con IA") },
@@ -316,13 +319,7 @@ fun LibraryListItem(
 @Composable
 fun LibraryGridItem(
     item: DownloadEntity,
-    onClick: () -> Unit,
-    onToggleFavorite: () -> Unit,
-    onMoveToTrash: () -> Unit,
-    onRestore: () -> Unit,
-    onPermanentDelete: () -> Unit,
-    onShare: () -> Unit,
-    onUpscale: () -> Unit
+    onClick: () -> Unit
 ) {
     Card(
         modifier = Modifier

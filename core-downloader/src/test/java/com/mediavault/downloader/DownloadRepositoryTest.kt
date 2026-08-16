@@ -1,11 +1,11 @@
 package com.mediavault.downloader
 
 import android.content.Context
+import com.mediavault.downloader.extractor.UniversalMediaExtractor
 import com.mediavault.downloader.model.MediaInfo
 import com.mediavault.downloader.model.Platform
-import com.mediavault.downloader.queue.DownloadQueue
 import com.mediavault.downloader.repository.DownloadRepository
-import com.mediavault.downloader.ytdlp.YtDlpExecutor
+import com.mediavault.storage.db.dao.CookieDao
 import com.mediavault.storage.db.dao.DownloadDao
 import com.mediavault.storage.db.dao.QueueDao
 import io.mockk.coEvery
@@ -19,15 +19,15 @@ import org.junit.Test
 class DownloadRepositoryTest {
 
     private val context = mockk<Context>(relaxed = true)
-    private val ytDlpExecutor = mockk<YtDlpExecutor>()
-    private val downloadQueue = mockk<DownloadQueue>(relaxed = true)
+    private val universalMediaExtractor = mockk<UniversalMediaExtractor>()
     private val queueDao = mockk<QueueDao>(relaxed = true)
     private val downloadDao = mockk<DownloadDao>(relaxed = true)
+    private val cookieDao = mockk<CookieDao>(relaxed = true)
     private lateinit var repository: DownloadRepository
 
     @Before
     fun setup() {
-        repository = DownloadRepository(context, ytDlpExecutor, downloadQueue, queueDao, downloadDao)
+        repository = DownloadRepository(context, universalMediaExtractor, queueDao, downloadDao, cookieDao)
     }
 
     @Test
@@ -49,11 +49,12 @@ class DownloadRepositoryTest {
             isLive = false
         )
         
-        coEvery { ytDlpExecutor.extractInfo(expectedUrl, null) } returns expectedInfo
+        coEvery { cookieDao.getByPlatform(any()) } returns null
+        coEvery { universalMediaExtractor.extract(expectedUrl, null) } returns expectedInfo
 
         val result = repository.fetchMediaInfo(expectedUrl)
 
         assertEquals(expectedInfo, result)
-        coVerify { ytDlpExecutor.extractInfo(expectedUrl, null) }
+        coVerify { universalMediaExtractor.extract(expectedUrl, null) }
     }
 }

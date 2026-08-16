@@ -2,19 +2,18 @@ package com.mediavault.downloader.repository
 
 import android.content.Context
 import androidx.work.*
+import com.mediavault.downloader.extractor.UniversalMediaExtractor
 import com.mediavault.downloader.model.MediaInfo
 import com.mediavault.downloader.model.Platform
-import com.mediavault.downloader.queue.DownloadQueue
-import com.mediavault.downloader.queue.DownloadStatus
-import com.mediavault.downloader.queue.QueueItem
 import com.mediavault.downloader.worker.DownloadWorker
-import com.mediavault.downloader.ytdlp.YtDlpExecutor
+import com.mediavault.storage.db.dao.CookieDao
 import com.mediavault.storage.db.dao.DownloadDao
 import com.mediavault.storage.db.dao.QueueDao
 import com.mediavault.storage.db.entity.DownloadEntity
 import com.mediavault.storage.db.entity.QueueItemEntity
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
+import timber.log.Timber
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -22,20 +21,24 @@ import javax.inject.Singleton
 @Singleton
 class DownloadRepository @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val ytDlpExecutor: YtDlpExecutor,
-    private val downloadQueue: DownloadQueue,
+    private val universalMediaExtractor: UniversalMediaExtractor,
     private val queueDao: QueueDao,
-    private val downloadDao: DownloadDao
+    private val downloadDao: DownloadDao,
+    private val cookieDao: CookieDao
 ) {
     val activeQueueFlow: Flow<List<QueueItemEntity>> = queueDao.getAllQueued()
     val historyFlow: Flow<List<DownloadEntity>> = downloadDao.getAllFlow()
 
-    suspend fun fetchMediaInfo(url: String, cookiesFile: String? = null): MediaInfo {
-        return ytDlpExecutor.extractInfo(url, cookiesFile)
+    suspend fun fetchMediaInfo(url: String): MediaInfo {
+        val platform = com.mediavault.downloader.detector.PlatformDetector().detect(url)
+        val cookieEntity = cookieDao.getByPlatform(platform.name)
+        val cookieHeader = cookieEntity?.cookieString
+        Timber.tag("MediaVaultDownload").d("Obteniendo MediaInfo para $url con cookies=${cookieHeader != null}")
+        return universalMediaExtractor.extract(url, cookieHeader)
     }
 
-    suspend fun fetchPlaylistInfo(url: String): MediaInfo {
-        return ytDlpExecutor.extractPlaylistInfo(url)
+    suspend fun checkDuplicate(url: String): DownloadEntity? {
+        return downloadDao.getByUrl(url)
     }
 
     suspend fun enqueueDownload(
@@ -55,6 +58,8 @@ class DownloadRepository @Inject constructor(
         wifiOnly: Boolean = false,
         speedLimitKbps: Int = 0
     ): Long {
+        Timber.tag("MediaVaultDownload").d("Encolando descarga: '$title' ($formatId) - Programada en $scheduledDelayMinutes mins")
+
         val queueItem = QueueItemEntity(
             url = url,
             title = title,
@@ -80,13 +85,15 @@ class DownloadRepository @Inject constructor(
         )
         val id = queueDao.insert(queueItem)
 
+        val isAudio = audioFormat != null && !audioFormat.equals("none", ignoreCase = true)
+
         val workData = Data.Builder()
             .putLong(DownloadWorker.KEY_QUEUE_ITEM_ID, id)
             .putString(DownloadWorker.KEY_URL, url)
             .putString(DownloadWorker.KEY_TITLE, title)
             .putString(DownloadWorker.KEY_PLATFORM, platform.name)
             .putString(DownloadWorker.KEY_FORMAT_ID, formatId)
-            .putBoolean(DownloadWorker.KEY_AUDIO_ONLY, audioFormat != null && !audioFormat.equals("none", ignoreCase = true))
+            .putBoolean(DownloadWorker.KEY_AUDIO_ONLY, isAudio)
             .putString(DownloadWorker.KEY_AUDIO_FORMAT, audioFormat)
             .putString(DownloadWorker.KEY_AUDIO_BITRATE, audioBitrate)
             .putBoolean(DownloadWorker.KEY_BURN_SUBTITLES, burnSubtitles)
@@ -134,7 +141,7 @@ class DownloadRepository @Inject constructor(
         enqueueDownload(
             url = item.url,
             title = item.title,
-            platform = Platform.valueOf(item.platform),
+            platform = try { Platform.valueOf(item.platform) } catch (e: Exception) { Platform.GENERIC },
             formatId = item.selectedFormat,
             quality = item.selectedQuality,
             audioFormat = item.audioFormat,

@@ -15,14 +15,20 @@ interface CookieDao {
     @Delete
     suspend fun delete(cookie: CookieEntity)
 
-    @Query("SELECT * FROM cookies")
+    @Query("SELECT * FROM cookies ORDER BY updatedAt DESC")
     fun getAllFlow(): Flow<List<CookieEntity>>
 
-    @Query("SELECT * FROM cookies WHERE platform = :platform LIMIT 1")
+    @Query("SELECT * FROM cookies WHERE platform = :platform OR domain LIKE '%' || :platform || '%' LIMIT 1")
     suspend fun getByPlatform(platform: String): CookieEntity?
 
-    @Query("DELETE FROM cookies WHERE platform = :platform")
+    @Query("SELECT * FROM cookies WHERE domain = :domain LIMIT 1")
+    suspend fun getByDomain(domain: String): CookieEntity?
+
+    @Query("DELETE FROM cookies WHERE platform = :platform OR domain = :platform")
     suspend fun deleteByPlatform(platform: String)
+
+    @Query("DELETE FROM cookies WHERE id = :id")
+    suspend fun deleteById(id: Long)
 
     @Query("DELETE FROM cookies")
     suspend fun deleteAll()

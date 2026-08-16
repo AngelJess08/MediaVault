@@ -3,38 +3,42 @@ package com.mediavault.downloader.model
 data class MediaInfo(
     val url: String,
     val title: String,
-    val description: String?,
-    val thumbnailUrl: String?,
-    val duration: Long, // segundos
-    val platform: Platform,
-    val uploader: String?,
-    val uploadDate: String?,
-    val isPlaylist: Boolean,
-    val playlistItems: List<PlaylistItem>?,
-    val formats: List<FormatOption>,
-    val subtitles: List<SubtitleTrack>,
-    val isLive: Boolean
+    val description: String? = null,
+    val thumbnailUrl: String? = null,
+    val duration: Long = 0L, // segundos
+    val platform: Platform = Platform.GENERIC,
+    val uploader: String? = null,
+    val uploadDate: String? = null,
+    val isPlaylist: Boolean = false,
+    val playlistItems: List<PlaylistItem>? = null,
+    val formats: List<FormatOption> = emptyList(),
+    val subtitles: List<SubtitleTrack> = emptyList(),
+    val isLive: Boolean = false
 )
 
 data class FormatOption(
     val formatId: String,
-    val ext: String,       // mp4, webm, mkv, m4a, opus, mp3, etc.
-    val resolution: String?,  // "1920x1080", null para audio
-    val fps: Float?,
-    val vcodec: String?,
-    val acodec: String?,
-    val filesize: Long?,   // bytes, puede ser null si estimado
-    val filesizeApprox: Long?,
-    val tbr: Float?,       // total bitrate
-    val vbr: Float?,
-    val abr: Float?,
-    val quality: Int,
-    val isAudioOnly: Boolean,
-    val isVideoOnly: Boolean,
-    val height: Int?,
-    val width: Int?,
-    val dynamicRange: String?, // SDR, HDR10, HDR12, etc.
-    val language: String?
+    val ext: String = "mp4",       // mp4, webm, mkv, m4a, opus, mp3, etc.
+    val resolution: String? = null,  // "1080p", "720p", "4K", etc.
+    val fps: Float? = null,
+    val vcodec: String? = null,
+    val acodec: String? = null,
+    val filesize: Long? = null,   // bytes, puede ser null si estimado
+    val filesizeApprox: Long? = null,
+    val tbr: Float? = null,       // total bitrate
+    val vbr: Float? = null,
+    val abr: Float? = null,
+    val quality: Int = 0,
+    val isAudioOnly: Boolean = false,
+    val isVideoOnly: Boolean = false,
+    val height: Int? = null,
+    val width: Int? = null,
+    val dynamicRange: String? = "SDR",
+    val language: String? = null,
+    val isNative: Boolean = true,
+    val isAiUpscaled: Boolean = false,
+    val streamUrl: String? = null,
+    val audioStreamUrl: String? = null
 )
 
 data class SubtitleTrack(

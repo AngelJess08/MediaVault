@@ -18,11 +18,14 @@ interface DownloadDao {
     @Query("SELECT * FROM downloads WHERE inTrash = 0")
     suspend fun getAll(): List<DownloadEntity>
 
-    @Query("SELECT * FROM downloads WHERE inTrash = 0")
+    @Query("SELECT * FROM downloads WHERE inTrash = 0 ORDER BY downloadedAt DESC")
     fun getAllFlow(): Flow<List<DownloadEntity>>
 
     @Query("SELECT * FROM downloads WHERE id = :id LIMIT 1")
     suspend fun getById(id: Long): DownloadEntity?
+
+    @Query("SELECT * FROM downloads WHERE url = :url AND inTrash = 0 LIMIT 1")
+    suspend fun getByUrl(url: String): DownloadEntity?
 
     @Query("SELECT * FROM downloads WHERE platform = :platform AND inTrash = 0")
     suspend fun getByPlatform(platform: String): List<DownloadEntity>

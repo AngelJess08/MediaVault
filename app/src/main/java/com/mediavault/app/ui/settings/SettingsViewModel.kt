@@ -3,10 +3,12 @@ package com.mediavault.app.ui.settings
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.mediavault.downloader.cookies.NetscapeCookieParser
 import com.mediavault.storage.datastore.Settings
 import com.mediavault.storage.datastore.SettingsDataStore
 import com.mediavault.storage.db.dao.CookieDao
 import com.mediavault.storage.db.dao.DownloadDao
+import com.mediavault.storage.db.entity.CookieEntity
 import com.mediavault.storage.repository.DownloadRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -28,6 +30,9 @@ class SettingsViewModel @Inject constructor(
 
     val settings: StateFlow<Settings> = settingsDataStore.settingsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), Settings())
+
+    val cookiesList: StateFlow<List<CookieEntity>> = cookieDao.getAllFlow()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     fun updateUpscaleBetaEnabled(enabled: Boolean) {
         viewModelScope.launch { settingsDataStore.updateUpscaleBetaEnabled(enabled) }
@@ -111,6 +116,30 @@ class SettingsViewModel @Inject constructor(
 
     fun updateAppIconStyle(style: String) {
         viewModelScope.launch { settingsDataStore.updateAppIconStyle(style) }
+    }
+
+    fun saveCookies(platform: String, domain: String, cookieString: String) {
+        viewModelScope.launch {
+            val entity = CookieEntity(
+                platform = platform.uppercase(),
+                domain = domain,
+                cookieString = cookieString,
+                updatedAt = System.currentTimeMillis()
+            )
+            cookieDao.insert(entity)
+        }
+    }
+
+    fun importCookiesText(content: String, onComplete: (Int) -> Unit) {
+        viewModelScope.launch {
+            val list = NetscapeCookieParser.parse(content)
+            list.forEach { cookieDao.insert(it) }
+            onComplete(list.size)
+        }
+    }
+
+    fun deleteCookie(id: Long) {
+        viewModelScope.launch { cookieDao.deleteById(id) }
     }
 
     fun clearAllCookies() {

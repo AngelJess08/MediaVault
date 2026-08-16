@@ -1,5 +1,7 @@
 package com.mediavault.app.ui.home
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -21,15 +23,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavHostController
 import coil.compose.AsyncImage
-import com.mediavault.app.R
 import com.mediavault.app.navigation.Screen
+import com.mediavault.app.ui.cookies.CookieLoginDialog
 import com.mediavault.downloader.model.FormatOption
 import com.mediavault.downloader.model.Platform
 import com.mediavault.storage.db.entity.DownloadEntity
@@ -44,7 +46,10 @@ fun HomeScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val recentDownloads by viewModel.recentDownloads.collectAsState()
+    val context = LocalContext.current
     var showAdvancedOptions by remember { mutableStateOf(false) }
+
+    var webViewLoginTarget: Pair<String, String>? by remember { mutableStateOf(null) }
 
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -135,7 +140,7 @@ fun HomeScreen(
                                 value = uiState.urlInput,
                                 onValueChange = { viewModel.onUrlChanged(it) },
                                 label = { Text("Pega el enlace del video o audio") },
-                                placeholder = { Text("YouTube, Instagram, TikTok, Twitter...") },
+                                placeholder = { Text("YouTube, Instagram, TikTok, Twitter/X...") },
                                 modifier = Modifier.fillMaxWidth(),
                                 shape = RoundedCornerShape(14.dp),
                                 singleLine = true,
@@ -214,25 +219,100 @@ fun HomeScreen(
                 }
             }
 
-            // Mensaje de Error si ocurre
-            uiState.errorMessage?.let { error ->
+            // AVISO DE DETECCIÓN DE DUPLICADOS (Función 6)
+            uiState.duplicateExistingDownload?.let { dup ->
                 item {
                     Surface(
-                        color = MaterialTheme.colorScheme.errorContainer,
-                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        shape = RoundedCornerShape(14.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text(
-                            text = error,
-                            color = MaterialTheme.colorScheme.onErrorContainer,
-                            modifier = Modifier.padding(12.dp),
-                            style = MaterialTheme.typography.bodySmall
-                        )
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Filled.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Este video ya fue descargado previamente",
+                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Archivo: ${dup.title} (${dup.format})",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                TextButton(onClick = { viewModel.dismissDuplicatePrompt() }) {
+                                    Text("Descargar de nuevo")
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Button(
+                                    onClick = {
+                                        if (dup.type == "AUDIO") {
+                                            navController.navigate(Screen.AudioPlayer.createRoute(Uri.encode(dup.filePath)))
+                                        } else {
+                                            navController.navigate(Screen.VideoPlayer.createRoute(Uri.encode(dup.filePath)))
+                                        }
+                                    },
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Abrir Existente")
+                                }
+                            }
+                        }
                     }
                 }
             }
 
-            // Información de Medios y Selector Dinámico de Formatos
+            // Mensaje de Error y Botón de Inicio de Sesión si es requerido
+            uiState.errorMessage?.let { error ->
+                item {
+                    Surface(
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Text(
+                                text = error,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            if (uiState.isLoginRequiredError) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Button(
+                                    onClick = {
+                                        val (targetUrl, name) = when (uiState.detectedPlatform) {
+                                            Platform.TWITTER -> "https://x.com/login" to "Twitter / X"
+                                            Platform.INSTAGRAM -> "https://www.instagram.com/accounts/login/" to "Instagram"
+                                            Platform.FACEBOOK -> "https://m.facebook.com/login/" to "Facebook"
+                                            else -> "https://accounts.google.com/" to "YouTube"
+                                        }
+                                        webViewLoginTarget = targetUrl to name
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Icon(Icons.Filled.Lock, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Iniciar sesión para descargar este contenido")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Información de Medios y Selector Dinámico de Formatos Nativos
             uiState.mediaInfo?.let { info ->
                 item {
                     MediaPreviewAndFormatPicker(
@@ -270,53 +350,36 @@ fun HomeScreen(
                         item = item,
                         onClick = {
                             if (item.type == "AUDIO") {
-                                navController.navigate(Screen.AudioPlayer.createRoute(android.net.Uri.encode(item.filePath)))
+                                navController.navigate(Screen.AudioPlayer.createRoute(Uri.encode(item.filePath)))
                             } else {
-                                navController.navigate(Screen.VideoPlayer.createRoute(android.net.Uri.encode(item.filePath)))
+                                navController.navigate(Screen.VideoPlayer.createRoute(Uri.encode(item.filePath)))
                             }
+                        },
+                        onShare = {
+                            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                type = if (item.type == "AUDIO") "audio/*" else "video/*"
+                                putExtra(Intent.EXTRA_STREAM, Uri.parse(item.filePath))
+                                flags = Intent.FLAG_GRANT_READ_URI_PERMISSION
+                            }
+                            context.startActivity(Intent.createChooser(shareIntent, "Compartir con"))
                         }
                     )
                 }
             }
-
-            // Indicador de Salud del Extractor
-            item {
-                Surface(
-                    color = MaterialTheme.colorScheme.surface,
-                    shape = RoundedCornerShape(12.dp),
-                    tonalElevation = 1.dp,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 12.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .clip(CircleShape)
-                                    .background(Color(0xFF4CAF50))
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "Motor de extracción: Actualizado",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Text(
-                            text = "v2026.08.15",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                }
-            }
         }
+    }
+
+    // WebView Dialog para Login
+    webViewLoginTarget?.let { (url, platform) ->
+        CookieLoginDialog(
+            initialUrl = url,
+            platformName = platform,
+            onDismiss = { webViewLoginTarget = null },
+            onCookiesCaptured = { currentUrl, cookies ->
+                viewModel.analyzeUrl()
+                webViewLoginTarget = null
+            }
+        )
     }
 }
 
@@ -458,13 +521,30 @@ fun MediaPreviewAndFormatPicker(
             Spacer(modifier = Modifier.height(12.dp))
 
             if (!uiState.isThumbnailOnly && !uiState.isAudioOnly) {
-                // Selector de Calidades y Resoluciones de Video
-                Text(
-                    text = "Resolución de Video disponible",
-                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold)
-                )
+                // Selector de Calidades Nativas Reales
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Calidades Nativas Disponibles",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold)
+                    )
+                    Surface(
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        shape = RoundedCornerShape(6.dp)
+                    ) {
+                        Text(
+                            text = "NATIVO",
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Black),
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                }
                 Spacer(modifier = Modifier.height(8.dp))
-                
+
                 val videoFormats = mediaInfo.formats.filter { !it.isAudioOnly }
                 LazyRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -496,7 +576,6 @@ fun MediaPreviewAndFormatPicker(
             }
 
             if (uiState.isAudioOnly) {
-                // Selector de Formatos de Audio Independientes
                 Text(
                     text = "Formato de Audio y Bitrate",
                     style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold)
@@ -549,7 +628,7 @@ fun MediaPreviewAndFormatPicker(
                     contentDescription = null
                 )
                 Spacer(modifier = Modifier.width(4.dp))
-                Text(if (showAdvanced) "Ocultar Opciones Avanzadas" else "Opciones Avanzadas (Recorte, Subtítulos, Wi-Fi...)")
+                Text(if (showAdvanced) "Ocultar Opciones Avanzadas" else "Opciones Avanzadas (Programar, Subtítulos, Wi-Fi...)")
             }
 
             if (showAdvanced) {
@@ -586,13 +665,13 @@ fun MediaPreviewAndFormatPicker(
                         )
                     }
 
-                    // Descarga Programada (Ej. Madrugada)
+                    // Descarga Programada (Madrugada o Delay)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Descarga programada (Madrugada)", style = MaterialTheme.typography.bodyMedium)
+                        Text("Programar descarga (Ahorro / Noche)", style = MaterialTheme.typography.bodyMedium)
                         FilterChip(
                             selected = uiState.scheduledDelayMinutes > 0,
                             onClick = { onSetScheduledDelay(if (uiState.scheduledDelayMinutes > 0) 0 else 180) },
@@ -612,7 +691,7 @@ fun MediaPreviewAndFormatPicker(
                 Icon(Icons.Filled.Download, contentDescription = null)
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = if (uiState.isThumbnailOnly) "Guardar Carátula" else if (uiState.isAudioOnly) "Descargar Audio" else "Descargar Video",
+                    text = if (uiState.isThumbnailOnly) "Guardar Carátula" else if (uiState.isAudioOnly) "Descargar Audio" else "Descargar Calidad Nativa (${uiState.selectedResolution})",
                     style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                 )
             }
@@ -623,7 +702,8 @@ fun MediaPreviewAndFormatPicker(
 @Composable
 fun RecentDownloadItemCard(
     item: DownloadEntity,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onShare: () -> Unit = {}
 ) {
     Surface(
         shape = RoundedCornerShape(14.dp),
@@ -656,6 +736,9 @@ fun RecentDownloadItemCard(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            }
+            IconButton(onClick = onShare) {
+                Icon(Icons.Outlined.Share, contentDescription = "Compartir", tint = MaterialTheme.colorScheme.primary)
             }
             IconButton(onClick = onClick) {
                 Icon(Icons.Filled.PlayArrow, contentDescription = "Reproducir")

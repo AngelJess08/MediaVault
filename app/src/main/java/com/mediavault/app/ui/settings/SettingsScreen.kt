@@ -6,6 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -19,13 +20,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavHostController
-import com.mediavault.app.R
-import com.mediavault.app.navigation.Screen
+import com.mediavault.app.ui.cookies.CookieLoginDialog
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -34,12 +33,17 @@ fun SettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val settings by viewModel.settings.collectAsState()
+    val cookiesList by viewModel.cookiesList.collectAsState()
     val context = LocalContext.current
 
     var showApiKeyDialog by remember { mutableStateOf(false) }
     var showEndpointDialog by remember { mutableStateOf(false) }
+    var showImportCookiesDialog by remember { mutableStateOf(false) }
     var tempApiKey by remember { mutableStateOf("") }
     var tempEndpoint by remember { mutableStateOf("") }
+    var tempCookiesText by remember { mutableStateOf("") }
+
+    var webViewLoginTarget: Pair<String, String>? by remember { mutableStateOf(null) }
 
     Scaffold(
         topBar = {
@@ -60,7 +64,7 @@ fun SettingsScreen(
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // SECCIÓN: ESCALADO IA (MODO DE PRUEBA / BETA)
+            // SECCIÓN: ESCALADO IA (MODO DE PRUEBA / BETA - AISLADO)
             item {
                 SettingsSectionTitle("Inteligencia Artificial y Escalado")
             }
@@ -99,7 +103,7 @@ fun SettingsScreen(
                                 Column {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Text(
-                                            "Escalado IA con GPU",
+                                            "Escalado con IA (Beta)",
                                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                                         )
                                         Spacer(modifier = Modifier.width(8.dp))
@@ -116,7 +120,7 @@ fun SettingsScreen(
                                         }
                                     }
                                     Text(
-                                        "Aumenta resolución (hasta 8K) y 60 FPS en la nube",
+                                        "Subir resolución y FPS en servidor GPU remoto",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -130,7 +134,7 @@ fun SettingsScreen(
 
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            "Nota: Esta función es experimental y se procesa 100% en servidores externos con GPU para no ralentizar tu teléfono. No interfiere con las descargas estándar.",
+                            "Aviso: El escalado IA puede fallar, consumir datos extra y tardar varios minutos según el servidor GPU en la nube. Si falla, el archivo nativo ya descargado se conserva 100% intacto.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
                         )
@@ -182,6 +186,119 @@ fun SettingsScreen(
                 }
             }
 
+            // SECCIÓN: COOKIES Y ACCESO A REDES SOCIALES
+            item {
+                SettingsSectionTitle("Sesiones y Cookies (Twitter/X, Instagram, etc.)")
+            }
+
+            item {
+                SettingsCard {
+                    Text(
+                        "Inicia sesión directamente para descargar contenido restringido o privado sin exportar archivos manualmente:",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = { webViewLoginTarget = "https://x.com/login" to "Twitter / X" },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text("Twitter / X", style = MaterialTheme.typography.labelSmall)
+                        }
+                        OutlinedButton(
+                            onClick = { webViewLoginTarget = "https://www.instagram.com/accounts/login/" to "Instagram" },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text("Instagram", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = { webViewLoginTarget = "https://m.facebook.com/login/" to "Facebook" },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text("Facebook", style = MaterialTheme.typography.labelSmall)
+                        }
+                        OutlinedButton(
+                            onClick = { webViewLoginTarget = "https://accounts.google.com/" to "YouTube" },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text("YouTube", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp))
+
+                    SettingsClickableItem(
+                        icon = Icons.Outlined.FileUpload,
+                        title = "Importar archivo cookies.txt (Netscape)",
+                        subtitle = "Pega o importa cookies exportadas desde extensiones",
+                        onClick = { showImportCookiesDialog = true }
+                    )
+
+                    if (cookiesList.isNotEmpty()) {
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp))
+                        Text(
+                            "Cookies Guardadas Activas (${cookiesList.size}):",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        cookiesList.forEach { cookie ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        Icons.Filled.CheckCircle,
+                                        contentDescription = null,
+                                        tint = Color(0xFF4CAF50),
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "${cookie.platform} (${cookie.domain})",
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { viewModel.deleteCookie(cookie.id) },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(Icons.Filled.DeleteOutline, contentDescription = "Eliminar", tint = MaterialTheme.colorScheme.error)
+                                }
+                            }
+                        }
+
+                        TextButton(
+                            onClick = { viewModel.clearAllCookies() },
+                            modifier = Modifier.align(Alignment.End)
+                        ) {
+                            Text("Eliminar Todas", color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
+            }
+
             // SECCIÓN: DESCARGAS Y RED
             item {
                 SettingsSectionTitle("Descargas y Conectividad")
@@ -192,7 +309,7 @@ fun SettingsScreen(
                     SettingsSwitchItem(
                         icon = Icons.Outlined.Wifi,
                         title = "Descargar solo con Wi-Fi",
-                        subtitle = "Evita el uso de datos móviles en descargas",
+                        subtitle = "Pausa descargas si el dispositivo pasa a datos móviles",
                         checked = settings.wifiOnlyDownload,
                         onCheckedChange = { viewModel.updateWifiOnly(it) }
                     )
@@ -214,7 +331,7 @@ fun SettingsScreen(
                     HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
                     SettingsClickableItem(
                         icon = Icons.Outlined.HighQuality,
-                        title = "Calidad de Video por Defecto",
+                        title = "Calidad Nativa por Defecto",
                         subtitle = settings.defaultVideoQuality,
                         onClick = {
                             val nextQ = when (settings.defaultVideoQuality) {
@@ -223,21 +340,6 @@ fun SettingsScreen(
                                 else -> "1080p"
                             }
                             viewModel.updateDefaultVideoQuality(nextQ)
-                        }
-                    )
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                    SettingsClickableItem(
-                        icon = Icons.Outlined.MusicNote,
-                        title = "Formato de Audio por Defecto",
-                        subtitle = "${settings.defaultAudioFormat.uppercase()} • ${settings.defaultAudioBitrate}",
-                        onClick = {
-                            val nextF = when (settings.defaultAudioFormat) {
-                                "mp3" -> "m4a"
-                                "m4a" -> "opus"
-                                "opus" -> "flac"
-                                else -> "mp3"
-                            }
-                            viewModel.updateDefaultAudioFormat(nextF)
                         }
                     )
                 }
@@ -275,16 +377,6 @@ fun SettingsScreen(
                             Toast.makeText(context, "Papelera vaciada con éxito", Toast.LENGTH_SHORT).show()
                         }
                     )
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                    SettingsClickableItem(
-                        icon = Icons.Outlined.Cookie,
-                        title = "Limpiar Cookies de Sesión",
-                        subtitle = "Borrar sesiones guardadas de Instagram, YouTube, etc.",
-                        onClick = {
-                            viewModel.clearAllCookies()
-                            Toast.makeText(context, "Cookies eliminadas", Toast.LENGTH_SHORT).show()
-                        }
-                    )
                 }
             }
 
@@ -303,22 +395,6 @@ fun SettingsScreen(
                         onCheckedChange = { viewModel.updateIsDarkTheme(it) }
                     )
                     HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                    SettingsSwitchItem(
-                        icon = Icons.Outlined.Palette,
-                        title = "Color Dinámico (Material You)",
-                        subtitle = "Sincronizar paleta con el fondo de pantalla del sistema",
-                        checked = settings.isDynamicColor,
-                        onCheckedChange = { viewModel.updateIsDynamicColor(it) }
-                    )
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                    SettingsSwitchItem(
-                        icon = Icons.Outlined.DataSaverOn,
-                        title = "Modo Ahorro de Datos",
-                        subtitle = "Reduce el tamaño de miniaturas y vistas previas",
-                        checked = settings.dataSaverMode,
-                        onCheckedChange = { viewModel.updateDataSaverMode(it) }
-                    )
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
                     SettingsClickableItem(
                         icon = Icons.Outlined.CloudDownload,
                         title = "Exportar Historial (Copia JSON)",
@@ -332,11 +408,71 @@ fun SettingsScreen(
                 }
             }
 
-            // Espacio final
             item {
                 Spacer(modifier = Modifier.height(30.dp))
             }
         }
+    }
+
+    // Diálogo de Login WebView
+    webViewLoginTarget?.let { (url, platform) ->
+        CookieLoginDialog(
+            initialUrl = url,
+            platformName = platform,
+            onDismiss = { webViewLoginTarget = null },
+            onCookiesCaptured = { currentUrl, cookies ->
+                val domain = try { java.net.URI(currentUrl).host ?: platform.lowercase() } catch (e: Exception) { platform.lowercase() }
+                viewModel.saveCookies(platform, domain, cookies)
+                Toast.makeText(context, "Cookies de $platform guardadas correctamente", Toast.LENGTH_SHORT).show()
+            }
+        )
+    }
+
+    // Diálogo para Importar cookies.txt
+    if (showImportCookiesDialog) {
+        AlertDialog(
+            onDismissRequest = { showImportCookiesDialog = false },
+            title = { Text("Importar cookies.txt (Netscape)") },
+            text = {
+                Column {
+                    Text(
+                        "Pega el contenido de tu archivo cookies.txt exportado:",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = tempCookiesText,
+                        onValueChange = { tempCookiesText = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(180.dp),
+                        placeholder = { Text("# Netscape HTTP Cookie File\n.twitter.com\tTRUE\t/...") },
+                        maxLines = 10
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (tempCookiesText.isNotBlank()) {
+                            viewModel.importCookiesText(tempCookiesText) { count ->
+                                Toast.makeText(context, "Se importaron $count dominios con cookies", Toast.LENGTH_SHORT).show()
+                            }
+                            tempCookiesText = ""
+                            showImportCookiesDialog = false
+                        }
+                    }
+                ) {
+                    Text("Importar")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showImportCookiesDialog = false }) {
+                    Text("Cancelar")
+                }
+            }
+        )
     }
 
     // Diálogo de API Key
@@ -348,51 +484,57 @@ fun SettingsScreen(
                 OutlinedTextField(
                     value = tempApiKey,
                     onValueChange = { tempApiKey = it },
-                    label = { Text("Pega tu API Key aquí") },
+                    label = { Text("API Token / Key") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
             },
             confirmButton = {
-                Button(onClick = {
-                    viewModel.updateUpscaleApiKey(tempApiKey)
-                    showApiKeyDialog = false
-                    Toast.makeText(context, "API Key guardada", Toast.LENGTH_SHORT).show()
-                }) {
+                Button(
+                    onClick = {
+                        viewModel.updateUpscaleApiKey(tempApiKey)
+                        showApiKeyDialog = false
+                    }
+                ) {
                     Text("Guardar")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showApiKeyDialog = false }) { Text("Cancelar") }
+                TextButton(onClick = { showApiKeyDialog = false }) {
+                    Text("Cancelar")
+                }
             }
         )
     }
 
-    // Diálogo de Endpoint
+    // Diálogo de Endpoint Propio
     if (showEndpointDialog) {
         AlertDialog(
             onDismissRequest = { showEndpointDialog = false },
-            title = { Text("Endpoint de Servidor GPU") },
+            title = { Text("Endpoint de Servidor GPU Propio") },
             text = {
                 OutlinedTextField(
                     value = tempEndpoint,
                     onValueChange = { tempEndpoint = it },
-                    label = { Text("URL Base (ej. http://192.168.1.100:8000)") },
+                    label = { Text("http://ip-servidor:8000") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
             },
             confirmButton = {
-                Button(onClick = {
-                    viewModel.updateUpscaleEndpoint(tempEndpoint)
-                    showEndpointDialog = false
-                    Toast.makeText(context, "Endpoint guardado", Toast.LENGTH_SHORT).show()
-                }) {
+                Button(
+                    onClick = {
+                        viewModel.updateUpscaleEndpoint(tempEndpoint)
+                        showEndpointDialog = false
+                    }
+                ) {
                     Text("Guardar")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showEndpointDialog = false }) { Text("Cancelar") }
+                TextButton(onClick = { showEndpointDialog = false }) {
+                    Text("Cancelar")
+                }
             }
         )
     }
@@ -402,9 +544,9 @@ fun SettingsScreen(
 fun SettingsSectionTitle(title: String) {
     Text(
         text = title,
-        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
         color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(start = 4.dp, top = 8.dp)
+        modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
     )
 }
 
@@ -420,31 +562,6 @@ fun SettingsCard(content: @Composable ColumnScope.() -> Unit) {
 }
 
 @Composable
-fun SettingsSwitchItem(
-    icon: ImageVector,
-    title: String,
-    subtitle: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-            Spacer(modifier = Modifier.width(12.dp))
-            Column {
-                Text(title, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold))
-                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
-    }
-}
-
-@Composable
 fun SettingsClickableItem(
     icon: ImageVector,
     title: String,
@@ -454,18 +571,40 @@ fun SettingsClickableItem(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick),
-        horizontalArrangement = Arrangement.SpaceBetween,
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-            Spacer(modifier = Modifier.width(12.dp))
-            Column {
-                Text(title, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold))
-                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
+        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
+        Spacer(modifier = Modifier.width(16.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold))
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+fun SettingsSwitchItem(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
+        Spacer(modifier = Modifier.width(16.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold))
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }

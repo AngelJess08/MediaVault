@@ -13,24 +13,31 @@ import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
-import com.mediavault.downloader.ytdlp.YtDlpExecutor
-import com.mediavault.storage.db.dao.QueueDao
+import com.mediavault.downloader.extractor.UniversalMediaExtractor
+import com.mediavault.storage.db.dao.CookieDao
 import com.mediavault.storage.db.dao.DownloadDao
+import com.mediavault.storage.db.dao.QueueDao
 import com.mediavault.storage.db.entity.DownloadEntity
 import com.mediavault.storage.mediastore.MediaStoreHelper
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import timber.log.Timber
 import java.io.File
+import java.io.FileOutputStream
+import java.util.concurrent.TimeUnit
 
 @HiltWorker
 class DownloadWorker @AssistedInject constructor(
     @Assisted private val context: Context,
     @Assisted private val params: WorkerParameters,
-    private val ytDlpExecutor: YtDlpExecutor,
+    private val universalMediaExtractor: UniversalMediaExtractor,
     private val queueDao: QueueDao,
     private val downloadDao: DownloadDao,
+    private val cookieDao: CookieDao,
     private val mediaStoreHelper: MediaStoreHelper
 ) : CoroutineWorker(context, params) {
 
@@ -55,10 +62,18 @@ class DownloadWorker @AssistedInject constructor(
 
         private const val CHANNEL_ID = "DOWNLOAD_CHANNEL"
         private const val NOTIFICATION_ID_BASE = 1000
+        private const val TAG = "MediaVaultDownload"
     }
 
     private val notificationManager =
         context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+    private val httpClient = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .followRedirects(true)
+        .followSslRedirects(true)
+        .build()
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val queueItemId = inputData.getLong(KEY_QUEUE_ITEM_ID, 0L)
@@ -66,18 +81,24 @@ class DownloadWorker @AssistedInject constructor(
         val title = inputData.getString(KEY_TITLE) ?: "Descarga MediaVault"
         val platform = inputData.getString(KEY_PLATFORM) ?: "GENERIC"
         val formatId = inputData.getString(KEY_FORMAT_ID) ?: "best"
-        val outputPath = inputData.getString(KEY_OUTPUT_PATH) ?: "${context.cacheDir.absolutePath}/mv_${System.currentTimeMillis()}"
         val isAudioOnly = inputData.getBoolean(KEY_AUDIO_ONLY, false)
         val isWifiOnly = inputData.getBoolean(KEY_WIFI_ONLY, false)
+        val ext = if (isAudioOnly) "mp3" else "mp4"
+        val outputPath = inputData.getString(KEY_OUTPUT_PATH) ?: "${context.cacheDir.absolutePath}/mv_${System.currentTimeMillis()}.$ext"
 
         val notificationId = (NOTIFICATION_ID_BASE + (queueItemId.toInt() % 10000)).coerceAtLeast(1)
+
+        Timber.tag(TAG).d("==================================================")
+        Timber.tag(TAG).d("Paso 1: Iniciando Worker para id=$queueItemId, url=$url")
+        Timber.tag(TAG).d("Paso 1: Formato=$formatId, isAudioOnly=$isAudioOnly, isWifiOnly=$isWifiOnly")
 
         try {
             createNotificationChannel()
 
             if (isWifiOnly && !isWifiConnected()) {
+                Timber.tag(TAG).w("Descarga pausada: Requiere Wi-Fi y el dispositivo está en red móvil")
                 if (queueItemId > 0) {
-                    queueDao.updateStatus(queueItemId, "ERROR_WIFI")
+                    queueDao.updateStatus(queueItemId, "PAUSADO_WIFI")
                 }
                 return@withContext Result.retry()
             }
@@ -87,37 +108,130 @@ class DownloadWorker @AssistedInject constructor(
             }
             setForeground(createForegroundInfo(notificationId, "Iniciando descarga: $title", 0))
 
-            val options = buildOptions()
-
-            ytDlpExecutor.downloadMedia(url, formatId, outputPath, options).collect { progress ->
-                val progressInt = progress.percent.toInt()
-                val text = "${progress.percent}% - ${progress.speed} - ETA: ${progress.eta}"
-                
-                notificationManager.notify(
-                    notificationId,
-                    createNotification("Descargando $title...", text, progressInt).build()
-                )
-
-                if (queueItemId > 0) {
-                    queueDao.updateProgress(queueItemId, progressInt, 0L, 0L)
-                }
-            }
-
-            // Descarga completada: guardar archivo simulado/real en Scoped Storage
-            val tempFile = File(outputPath)
-            if (!tempFile.exists()) {
-                tempFile.parentFile?.mkdirs()
-                tempFile.writeText("MediaVault Mock Binary Content: $url")
-            }
-
-            val finalUri = if (isAudioOnly) {
-                mediaStoreHelper.saveAudio(tempFile, title, null)
+            // Paso 2: Obtener cookies si existen para la plataforma / dominio
+            val cookieEntity = cookieDao.getByPlatform(platform)
+            val cookieHeader = cookieEntity?.cookieString
+            if (!cookieHeader.isNullOrBlank()) {
+                Timber.tag(TAG).d("Paso 2: Inyectando cookies guardadas para plataforma $platform")
             } else {
-                mediaStoreHelper.saveVideo(tempFile, title, null)
+                Timber.tag(TAG).d("Paso 2: Sin cookies registradas para $platform, continuando con request estándar")
             }
 
-            tempFile.delete()
+            // Paso 3: Extraer URL de stream real
+            Timber.tag(TAG).d("Paso 3: Extrayendo información y stream con UniversalMediaExtractor...")
+            val mediaInfo = universalMediaExtractor.extract(url, cookieHeader)
+            val selectedFormat = mediaInfo.formats.find { it.formatId == formatId }
+                ?: mediaInfo.formats.firstOrNull { if (isAudioOnly) it.isAudioOnly else !it.isAudioOnly }
+                ?: mediaInfo.formats.firstOrNull()
 
+            val streamUrl = selectedFormat?.streamUrl ?: url
+            Timber.tag(TAG).d("Paso 4: Stream seleccionado: ${selectedFormat?.resolution ?: formatId} -> $streamUrl")
+
+            // Paso 5: Conectar y descargar bytes vía OkHttp
+            val requestBuilder = Request.Builder()
+                .url(streamUrl)
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
+                .header("Accept", "*/*")
+                .header("Referer", url)
+
+            if (!cookieHeader.isNullOrBlank()) {
+                requestBuilder.header("Cookie", cookieHeader)
+            }
+
+            val targetFile = File(outputPath)
+            targetFile.parentFile?.mkdirs()
+
+            Timber.tag(TAG).d("Paso 5: Conectando vía HTTP streaming a $streamUrl...")
+            httpClient.newCall(requestBuilder.build()).execute().use { response ->
+                if (!response.isSuccessful) {
+                    val code = response.code
+                    Timber.tag(TAG).e("Error HTTP $code al descargar stream")
+                    if (code == 401 || code == 403) {
+                        throw Exception("Login requerido o contenido privado (HTTP $code)")
+                    }
+                    throw Exception("Servidor respondió con código HTTP $code")
+                }
+
+                val body = response.body ?: throw Exception("Cuerpo de respuesta vacío")
+                val contentLength = body.contentLength()
+                val totalBytes = if (contentLength > 0) contentLength else (selectedFormat?.filesizeApprox ?: (25 * 1024 * 1024L))
+                Timber.tag(TAG).d("Paso 6: Descargando ${totalBytes / (1024 * 1024)} MB hacia $outputPath...")
+
+                val inputStream = body.byteStream()
+                val outputStream = FileOutputStream(targetFile)
+                val buffer = ByteArray(32 * 1024)
+                var bytesRead: Int
+                var totalDownloaded = 0L
+                var lastProgressUpdate = System.currentTimeMillis()
+                var lastBytesDownloaded = 0L
+
+                while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                    outputStream.write(buffer, 0, bytesRead)
+                    totalDownloaded += bytesRead
+
+                    val now = System.currentTimeMillis()
+                    if (now - lastProgressUpdate > 500) {
+                        val percent = if (totalBytes > 0) ((totalDownloaded.toFloat() / totalBytes) * 100f).coerceIn(0f, 99f) else 50f
+                        val progressInt = percent.toInt()
+                        val speedBytesPerSec = ((totalDownloaded - lastBytesDownloaded) * 1000L) / (now - lastProgressUpdate).coerceAtLeast(1)
+                        val speedText = String.format("%.1f MB/s", speedBytesPerSec / (1024.0 * 1024.0))
+                        val remainingBytes = (totalBytes - totalDownloaded).coerceAtLeast(0)
+                        val etaSec = if (speedBytesPerSec > 0) remainingBytes / speedBytesPerSec else 0L
+
+                        Timber.tag(TAG).d("Progreso: $progressInt% | $speedText | ETA: ${etaSec}s | Descargados: ${totalDownloaded / (1024 * 1024)}MB")
+
+                        notificationManager.notify(
+                            notificationId,
+                            createNotification("Descargando $title...", "$progressInt% - $speedText", progressInt).build()
+                        )
+
+                        // Enviar broadcast a Widget de escritorio
+                        try {
+                            context.sendBroadcast(Intent("com.mediavault.app.ACTION_UPDATE_WIDGET_PROGRESS").apply {
+                                putExtra("EXTRA_STATUS", "$title ($progressInt% - $speedText)")
+                                putExtra("EXTRA_PROGRESS", progressInt)
+                            })
+                        } catch (e: Exception) {
+                            // Ignorar si el widget no está activo
+                        }
+
+                        if (queueItemId > 0) {
+                            queueDao.updateProgress(queueItemId, progressInt, speedBytesPerSec, etaSec)
+                        }
+
+                        lastProgressUpdate = now
+                        lastBytesDownloaded = totalDownloaded
+                    }
+                }
+
+                outputStream.flush()
+                outputStream.close()
+                inputStream.close()
+                Timber.tag(TAG).d("Paso 6: Descarga de bytes finalizada con éxito (${targetFile.length()} bytes)")
+            }
+
+            // Actualizar widget al completar
+            try {
+                context.sendBroadcast(Intent("com.mediavault.app.ACTION_UPDATE_WIDGET_PROGRESS").apply {
+                    putExtra("EXTRA_STATUS", "Descarga completada: $title")
+                    putExtra("EXTRA_PROGRESS", 100)
+                })
+            } catch (e: Exception) {}
+
+            // Paso 7: Guardar en Scoped Storage (MediaStore)
+            Timber.tag(TAG).d("Paso 7: Guardando archivo en Scoped Storage (MediaStore)...")
+            val finalUri = if (isAudioOnly) {
+                mediaStoreHelper.saveAudio(targetFile, title, null)
+            } else {
+                mediaStoreHelper.saveVideo(targetFile, title, null)
+            }
+
+            val finalFileSize = targetFile.length().coerceAtLeast(1024L)
+            targetFile.delete()
+
+            Timber.tag(TAG).d("Paso 7: Archivo guardado exitosamente en URI: $finalUri")
+
+            // Paso 8: Persistir en Room DB
             if (queueItemId > 0) {
                 queueDao.updateStatus(queueItemId, "COMPLETED")
             }
@@ -127,31 +241,30 @@ class DownloadWorker @AssistedInject constructor(
                 title = title,
                 platform = platform,
                 filePath = finalUri?.toString() ?: "",
-                thumbnailPath = null,
-                fileSize = 45 * 1024 * 1024L,
+                thumbnailPath = mediaInfo.thumbnailUrl,
+                fileSize = finalFileSize,
                 downloadedAt = System.currentTimeMillis(),
-                format = formatId,
+                format = selectedFormat?.resolution ?: formatId,
                 type = if (isAudioOnly) "AUDIO" else "VIDEO",
                 status = "COMPLETED",
-                duration = 215L,
-                tags = "",
-                isFavorite = false,
-                isPrivate = false,
-                folderId = null,
-                inTrash = false
+                duration = mediaInfo.duration.coerceAtLeast(30L),
+                author = mediaInfo.uploader,
+                videoResolution = selectedFormat?.resolution
             )
             downloadDao.insert(downloadEntity)
 
-            showCompletedNotification(notificationId, title, finalUri?.toString() ?: "")
+            Timber.tag(TAG).d("Paso 8: Registro persistido en base de datos Room. ¡Descarga completada!")
+            Timber.tag(TAG).d("==================================================")
 
+            showCompletedNotification(notificationId, title, finalUri?.toString() ?: "")
             Result.success()
 
         } catch (e: Exception) {
-            e.printStackTrace()
-            val errorMessage = e.message ?: "Error desconocido"
-            
+            Timber.tag(TAG).e(e, "ERROR en el flujo de descarga para $url: ${e.message}")
+            val errorMessage = e.message ?: "Error de red desconocido"
+
             val tempFile = File(outputPath)
-            if (tempFile.exists() && tempFile.isFile) {
+            if (tempFile.exists()) {
                 tempFile.delete()
             }
 
@@ -159,64 +272,17 @@ class DownloadWorker @AssistedInject constructor(
                 queueDao.updateStatus(queueItemId, "ERROR: $errorMessage")
             }
 
-            if (runAttemptCount < 2) {
+            if (runAttemptCount < 2 && !errorMessage.contains("Login requerido")) {
+                Timber.tag(TAG).w("Reintentando descarga (intento ${runAttemptCount + 1})...")
                 Result.retry()
             } else {
                 notificationManager.notify(
                     notificationId,
-                    createNotification("Error en descarga", errorMessage, 0).build()
+                    createNotification("Error al descargar $title", errorMessage, 0).build()
                 )
                 Result.failure()
             }
         }
-    }
-
-    private fun buildOptions(): Map<String, String> {
-        val options = mutableMapOf<String, String>()
-        
-        val speedLimit = inputData.getString(KEY_SPEED_LIMIT_KBPS)
-        if (!speedLimit.isNullOrEmpty()) {
-            options["--limit-rate"] = "${speedLimit}K"
-        }
-
-        val trimStart = inputData.getString(KEY_TRIM_START)
-        val trimEnd = inputData.getString(KEY_TRIM_END)
-        if (!trimStart.isNullOrEmpty() && !trimEnd.isNullOrEmpty()) {
-            options["--download-sections"] = "*$trimStart-$trimEnd"
-        }
-
-        val embedMetadata = inputData.getBoolean(KEY_EMBED_METADATA, false)
-        if (embedMetadata) {
-            options["--embed-metadata"] = ""
-        }
-
-        val embedThumbnail = inputData.getBoolean(KEY_EMBED_THUMBNAIL, false)
-        if (embedThumbnail) {
-            options["--embed-thumbnail"] = ""
-        }
-
-        val burnSubtitles = inputData.getBoolean(KEY_BURN_SUBTITLES, false)
-        val subLang = inputData.getString(KEY_SUBTITLE_LANG)
-        if (burnSubtitles) {
-            options["--write-subs"] = ""
-            options["--embed-subs"] = ""
-            if (!subLang.isNullOrEmpty()) {
-                options["--sub-lang"] = subLang
-            }
-        }
-
-        val isAudioOnly = inputData.getBoolean(KEY_AUDIO_ONLY, false)
-        if (isAudioOnly) {
-            options["--extract-audio"] = ""
-            val audioFormat = inputData.getString(KEY_AUDIO_FORMAT) ?: "mp3"
-            options["--audio-format"] = audioFormat
-            val audioBitrate = inputData.getString(KEY_AUDIO_BITRATE)
-            if (!audioBitrate.isNullOrEmpty()) {
-                options["--audio-quality"] = audioBitrate
-            }
-        }
-
-        return options
     }
 
     private fun isWifiConnected(): Boolean {
@@ -250,11 +316,24 @@ class DownloadWorker @AssistedInject constructor(
             data = android.net.Uri.parse(uriString)
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
         }
-        
+
         val pendingIntent = PendingIntent.getActivity(
             context,
             id,
             intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        // Acción de compartir directo
+        val shareIntent = Intent(Intent.ACTION_SEND).apply {
+            type = "*/*"
+            putExtra(Intent.EXTRA_STREAM, android.net.Uri.parse(uriString))
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
+        }
+        val sharePendingIntent = PendingIntent.getActivity(
+            context,
+            id + 5000,
+            Intent.createChooser(shareIntent, "Compartir descarga"),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
@@ -264,11 +343,8 @@ class DownloadWorker @AssistedInject constructor(
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
-            .addAction(
-                android.R.drawable.ic_menu_view,
-                "Abrir archivo",
-                pendingIntent
-            )
+            .addAction(android.R.drawable.ic_menu_view, "Abrir", pendingIntent)
+            .addAction(android.R.drawable.ic_menu_share, "Compartir", sharePendingIntent)
             .build()
 
         notificationManager.notify(id, notification)
@@ -278,10 +354,10 @@ class DownloadWorker @AssistedInject constructor(
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "Descargas",
+                "Descargas MediaVault",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Progreso de las descargas"
+                description = "Progreso de las descargas activas"
             }
             notificationManager.createNotificationChannel(channel)
         }

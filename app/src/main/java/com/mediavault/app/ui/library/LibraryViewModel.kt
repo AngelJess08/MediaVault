@@ -2,6 +2,7 @@ package com.mediavault.app.ui.library
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.mediavault.downloader.model.Platform
 import com.mediavault.storage.db.dao.DownloadDao
 import com.mediavault.storage.db.entity.DownloadEntity
 import com.mediavault.storage.repository.DownloadRepository
@@ -22,7 +23,8 @@ data class LibraryUiState(
 @HiltViewModel
 class LibraryViewModel @Inject constructor(
     private val downloadDao: DownloadDao,
-    private val downloadRepository: DownloadRepository
+    private val downloadRepository: DownloadRepository,
+    private val coreDownloaderRepo: com.mediavault.downloader.repository.DownloadRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(LibraryUiState())
@@ -62,6 +64,19 @@ class LibraryViewModel @Inject constructor(
 
     fun toggleViewMode() {
         _uiState.update { it.copy(isGridView = !it.isGridView) }
+    }
+
+    fun reDownload(item: DownloadEntity) {
+        viewModelScope.launch {
+            coreDownloaderRepo.enqueueDownload(
+                url = item.url,
+                title = item.title,
+                platform = try { Platform.valueOf(item.platform) } catch (e: Exception) { Platform.GENERIC },
+                formatId = item.format,
+                quality = item.videoResolution ?: "1080p",
+                audioFormat = if (item.type == "AUDIO") "mp3" else null
+            )
+        }
     }
 
     fun toggleFavorite(item: DownloadEntity) {
