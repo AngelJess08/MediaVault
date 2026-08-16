@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="paste_and_download"
+        android:enabled="true"
+        android:icon="@drawable/ic_launcher_foreground"
+        android:shortcutShortLabel="@string/home_paste_button"
+        android:shortcutLongLabel="@string/home_paste_button">
+        <intent
+            android:action="android.intent.action.MAIN"
+            android:targetPackage="com.mediavault.app"
+            android:targetClass="com.mediavault.app.MainActivity">
+            <extra android:name="shortcut_action" android:value="paste_download" />
+        </intent>
+        <categories android:name="android.intent.category.LAUNCHER" />
+    </shortcut>
+
+    <shortcut
+        android:shortcutId="scan_qr"
+        android:enabled="true"
+        android:icon="@drawable/ic_launcher_foreground"
+        android:shortcutShortLabel="@string/shortcut_scan_qr"
+        android:shortcutLongLabel="@string/shortcut_scan_qr_long">
+        <intent
+            android:action="android.intent.action.MAIN"
+            android:targetPackage="com.mediavault.app"
+            android:targetClass="com.mediavault.app.MainActivity">
+            <extra android:name="shortcut_action" android:value="scan_qr" />
+        </intent>
+        <categories android:name="android.intent.category.LAUNCHER" />
+    </shortcut>
+</shortcuts>
