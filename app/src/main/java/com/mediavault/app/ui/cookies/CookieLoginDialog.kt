@@ -89,7 +89,12 @@ fun CookieLoginDialog(
                             WebView(ctx).apply {
                                 settings.javaScriptEnabled = true
                                 settings.domStorageEnabled = true
-                                settings.databaseEnabled = true
+                                settings.allowFileAccess = false
+                                settings.allowContentAccess = false
+                                settings.setGeolocationEnabled(false)
+                                settings.savePassword = false
+                                settings.saveFormData = false
+                                settings.mediaPlaybackRequiresUserGesture = true
                                 settings.userAgentString =
                                     "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
                                 
@@ -97,9 +102,20 @@ fun CookieLoginDialog(
                                     override fun onReceivedTitle(view: WebView?, title: String?) {
                                         pageTitle = title ?: ""
                                     }
+                                    override fun onCreateWindow(view: WebView?, isDialog: Boolean, isUserGesture: Boolean, resultMsg: android.os.Message?): Boolean {
+                                        return false
+                                    }
                                 }
 
                                 webViewClient = object : WebViewClient() {
+                                    override fun shouldOverrideUrlLoading(view: WebView?, request: android.webkit.WebResourceRequest?): Boolean {
+                                        val u = request?.url?.toString() ?: return false
+                                        if (!u.startsWith("http://", ignoreCase = true) && !u.startsWith("https://", ignoreCase = true)) {
+                                            return true // Bloquea esquemas intent:// en diálogo de login
+                                        }
+                                        return false
+                                    }
+
                                     override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                                         isLoading = true
                                     }

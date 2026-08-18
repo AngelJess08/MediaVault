@@ -2,6 +2,7 @@ package com.mediavault.downloader.repository
 
 import android.content.Context
 import androidx.work.*
+import com.mediavault.downloader.detector.PlatformDetector
 import com.mediavault.downloader.extractor.UniversalMediaExtractor
 import com.mediavault.downloader.model.MediaInfo
 import com.mediavault.downloader.model.Platform
@@ -22,6 +23,7 @@ import javax.inject.Singleton
 class DownloadRepository @Inject constructor(
     @ApplicationContext private val context: Context,
     private val universalMediaExtractor: UniversalMediaExtractor,
+    private val platformDetector: PlatformDetector,
     private val queueDao: QueueDao,
     private val downloadDao: DownloadDao,
     private val cookieDao: CookieDao
@@ -29,12 +31,18 @@ class DownloadRepository @Inject constructor(
     val activeQueueFlow: Flow<List<QueueItemEntity>> = queueDao.getAllQueued()
     val historyFlow: Flow<List<DownloadEntity>> = downloadDao.getAllFlow()
 
-    suspend fun fetchMediaInfo(url: String): MediaInfo {
-        val platform = com.mediavault.downloader.detector.PlatformDetector().detect(url)
-        val cookieEntity = cookieDao.getByPlatform(platform.name)
-        val cookieHeader = cookieEntity?.cookieString
-        Timber.tag("MediaVaultDownload").d("Obteniendo MediaInfo para $url con cookies=${cookieHeader != null}")
-        return universalMediaExtractor.extract(url, cookieHeader)
+    suspend fun fetchMediaInfo(url: String, onStatusUpdate: ((String) -> Unit)? = null): MediaInfo {
+        val resolvedUrl = platformDetector.resolveRedirects(url)
+        val platform = platformDetector.detect(resolvedUrl)
+
+        // Combinar todas las cookies de los subdominios de la plataforma
+        val cookiesList = cookieDao.getAllByPlatform(platform.name)
+        val cookieHeader = if (cookiesList.isNotEmpty()) {
+            cookiesList.map { it.cookieString }.filter { it.isNotBlank() }.joinToString("; ")
+        } else null
+
+        Timber.tag("MediaVaultDebug").d("fetchMediaInfo para $resolvedUrl con plataforma $platform (Cookies activas: ${cookiesList.size})")
+        return universalMediaExtractor.extract(resolvedUrl, cookieHeader, onStatusUpdate)
     }
 
     suspend fun checkDuplicate(url: String): DownloadEntity? {
@@ -58,7 +66,7 @@ class DownloadRepository @Inject constructor(
         wifiOnly: Boolean = false,
         speedLimitKbps: Int = 0
     ): Long {
-        Timber.tag("MediaVaultDownload").d("Encolando descarga: '$title' ($formatId) - Programada en $scheduledDelayMinutes mins")
+        Timber.tag("MediaVaultDebug").d("Encolando descarga: '$title' ($formatId) - Programada en $scheduledDelayMinutes mins")
 
         val queueItem = QueueItemEntity(
             url = url,

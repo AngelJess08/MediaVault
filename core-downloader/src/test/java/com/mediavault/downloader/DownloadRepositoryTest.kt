@@ -1,6 +1,7 @@
 package com.mediavault.downloader
 
 import android.content.Context
+import com.mediavault.downloader.detector.PlatformDetector
 import com.mediavault.downloader.extractor.UniversalMediaExtractor
 import com.mediavault.downloader.model.MediaInfo
 import com.mediavault.downloader.model.Platform
@@ -20,6 +21,7 @@ class DownloadRepositoryTest {
 
     private val context = mockk<Context>(relaxed = true)
     private val universalMediaExtractor = mockk<UniversalMediaExtractor>()
+    private val platformDetector = mockk<PlatformDetector>()
     private val queueDao = mockk<QueueDao>(relaxed = true)
     private val downloadDao = mockk<DownloadDao>(relaxed = true)
     private val cookieDao = mockk<CookieDao>(relaxed = true)
@@ -27,7 +29,7 @@ class DownloadRepositoryTest {
 
     @Before
     fun setup() {
-        repository = DownloadRepository(context, universalMediaExtractor, queueDao, downloadDao, cookieDao)
+        repository = DownloadRepository(context, universalMediaExtractor, platformDetector, queueDao, downloadDao, cookieDao)
     }
 
     @Test
@@ -49,12 +51,15 @@ class DownloadRepositoryTest {
             isLive = false
         )
         
+        coEvery { platformDetector.resolveRedirects(expectedUrl) } returns expectedUrl
+        coEvery { platformDetector.detect(expectedUrl) } returns Platform.YOUTUBE
+        coEvery { cookieDao.getAllByPlatform(any()) } returns emptyList()
         coEvery { cookieDao.getByPlatform(any()) } returns null
-        coEvery { universalMediaExtractor.extract(expectedUrl, null) } returns expectedInfo
+        coEvery { universalMediaExtractor.extract(expectedUrl, null, any()) } returns expectedInfo
 
         val result = repository.fetchMediaInfo(expectedUrl)
 
         assertEquals(expectedInfo, result)
-        coVerify { universalMediaExtractor.extract(expectedUrl, null) }
+        coVerify { universalMediaExtractor.extract(expectedUrl, null, any()) }
     }
 }

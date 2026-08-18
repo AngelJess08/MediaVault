@@ -30,6 +30,9 @@ interface QueueDao {
     @Query("UPDATE queue_items SET status = :status WHERE id = :id")
     suspend fun updateStatus(id: Long, status: String)
 
+    @Query("UPDATE queue_items SET status = 'FAILED', errorMessage = :error WHERE id = :id")
+    suspend fun updateError(id: Long, error: String)
+
     @Query("SELECT * FROM queue_items WHERE status = 'PENDING' ORDER BY priority DESC, createdAt ASC LIMIT 1")
     suspend fun getNextPending(): QueueItemEntity?
 

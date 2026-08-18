@@ -18,6 +18,9 @@ interface CookieDao {
     @Query("SELECT * FROM cookies ORDER BY updatedAt DESC")
     fun getAllFlow(): Flow<List<CookieEntity>>
 
+    @Query("SELECT * FROM cookies WHERE platform = :platform OR domain LIKE '%' || :platform || '%'")
+    suspend fun getAllByPlatform(platform: String): List<CookieEntity>
+
     @Query("SELECT * FROM cookies WHERE platform = :platform OR domain LIKE '%' || :platform || '%' LIMIT 1")
     suspend fun getByPlatform(platform: String): CookieEntity?
 

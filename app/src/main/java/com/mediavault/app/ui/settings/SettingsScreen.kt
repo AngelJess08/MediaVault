@@ -186,6 +186,70 @@ fun SettingsScreen(
                 }
             }
 
+            // SECCIÓN: MODO NAVEGADOR (OPCIONAL / SECUNDARIO)
+            item {
+                SettingsSectionTitle("Navegación Web Integrada (Opcional)")
+            }
+
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (settings.isBrowserModeEnabled)
+                            MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.25f)
+                        else
+                            MaterialTheme.colorScheme.surface
+                    ),
+                    border = if (settings.isBrowserModeEnabled)
+                        CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.tertiary.copy(alpha = 0.4f)))
+                    else null
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.Outlined.Language,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.tertiary,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column {
+                                    Text(
+                                        "Habilitar Modo Navegador",
+                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                                    )
+                                    Text(
+                                        "Navegador in-app con detector de videos y bloqueo de anuncios",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            Switch(
+                                checked = settings.isBrowserModeEnabled,
+                                onCheckedChange = { viewModel.updateIsBrowserModeEnabled(it) }
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            "Aviso: La función principal de MediaVault sigue siendo pegar URLs directamente. El Modo Navegador es una opción secundaria aislada con filtro anti-malware, bloqueo de popups y captura pasiva de streams mientras exploras sitios web.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                        )
+                    }
+                }
+            }
+
             // SECCIÓN: COOKIES Y ACCESO A REDES SOCIALES
             item {
                 SettingsSectionTitle("Sesiones y Cookies (Twitter/X, Instagram, etc.)")
@@ -267,7 +331,10 @@ fun SettingsScreen(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                Row(
+                                    modifier = Modifier.weight(1f),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
                                     Icon(
                                         Icons.Filled.CheckCircle,
                                         contentDescription = null,
@@ -277,14 +344,30 @@ fun SettingsScreen(
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
                                         text = "${cookie.platform} (${cookie.domain})",
-                                        style = MaterialTheme.typography.bodySmall
+                                        style = MaterialTheme.typography.bodySmall,
+                                        maxLines = 1
                                     )
                                 }
-                                IconButton(
-                                    onClick = { viewModel.deleteCookie(cookie.id) },
-                                    modifier = Modifier.size(24.dp)
-                                ) {
-                                    Icon(Icons.Filled.DeleteOutline, contentDescription = "Eliminar", tint = MaterialTheme.colorScheme.error)
+
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    FilledTonalButton(
+                                        onClick = {
+                                            viewModel.testCookieSession(cookie.platform) { success, msg ->
+                                                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                            }
+                                        },
+                                        modifier = Modifier.height(32.dp),
+                                        contentPadding = PaddingValues(horizontal = 8.dp)
+                                    ) {
+                                        Text("Probar Sesión", style = MaterialTheme.typography.labelSmall)
+                                    }
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    IconButton(
+                                        onClick = { viewModel.deleteCookie(cookie.id) },
+                                        modifier = Modifier.size(28.dp)
+                                    ) {
+                                        Icon(Icons.Filled.DeleteOutline, contentDescription = "Eliminar", tint = MaterialTheme.colorScheme.error)
+                                    }
                                 }
                             }
                         }

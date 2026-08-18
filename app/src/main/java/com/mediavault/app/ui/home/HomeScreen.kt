@@ -113,6 +113,60 @@ fun HomeScreen(
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            // BANNER DE ENLACE DETECTADO EN PORTAPAPELES (Función 5)
+            uiState.detectedClipboardUrl?.let { clipUrl ->
+                item {
+                    Surface(
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Outlined.ContentPaste, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column {
+                                    Text(
+                                        "Enlace copiado detectado",
+                                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                                    )
+                                    Text(
+                                        clipUrl,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Row {
+                                IconButton(onClick = { viewModel.dismissDetectedClipboardUrl() }, modifier = Modifier.size(32.dp)) {
+                                    Icon(Icons.Filled.Close, contentDescription = "Ignorar", modifier = Modifier.size(18.dp))
+                                }
+                                Button(
+                                    onClick = { viewModel.applyDetectedClipboardUrl() },
+                                    shape = RoundedCornerShape(10.dp),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                ) {
+                                    Text("Pegar")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Tarjeta de Extracción Principal
             item {
                 Card(
@@ -185,10 +239,22 @@ fun HomeScreen(
                                 }
                             }
 
-                            // Badge de Plataforma Detectada
+                            // Badge de Plataforma Detectada o Acceso a Navegador
                             if (uiState.detectedPlatform != Platform.UNKNOWN && uiState.detectedPlatform != Platform.GENERIC) {
                                 Spacer(modifier = Modifier.height(10.dp))
                                 PlatformBadge(platform = uiState.detectedPlatform)
+                            } else if (uiState.isBrowserModeEnabled) {
+                                Spacer(modifier = Modifier.height(10.dp))
+                                OutlinedButton(
+                                    onClick = { navController.navigate(Screen.Browser.route) },
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier.fillMaxWidth(),
+                                    contentPadding = PaddingValues(vertical = 8.dp)
+                                ) {
+                                    Icon(Icons.Outlined.Language, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Explorar sitios en Modo Navegador", style = MaterialTheme.typography.labelMedium)
+                                }
                             }
                         } else {
                             // Modo Lote
@@ -214,6 +280,64 @@ fun HomeScreen(
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text("Descargar Todo el Lote")
                             }
+                        }
+                    }
+                }
+            }
+
+            // BANNER / CARD DE MODO UNIVERSAL ACTIVO (WebView Sniffer en segundo plano)
+            if (uiState.isUniversalModeActive) {
+                item {
+                    Surface(
+                        color = MaterialTheme.colorScheme.tertiaryContainer,
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    modifier = Modifier.weight(1f),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(24.dp),
+                                        strokeWidth = 2.5.dp,
+                                        color = MaterialTheme.colorScheme.onTertiaryContainer
+                                    )
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Column {
+                                        Text(
+                                            text = "Modo Universal Activo",
+                                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                            color = MaterialTheme.colorScheme.onTertiaryContainer
+                                        )
+                                        Text(
+                                            text = uiState.universalModeMessage ?: "Buscando el video de otra forma...",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.85f)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                OutlinedButton(
+                                    onClick = { viewModel.cancelAnalysis() },
+                                    shape = RoundedCornerShape(10.dp),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                                ) {
+                                    Text("Cancelar", style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(10.dp))
+                            LinearProgressIndicator(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(4.dp),
+                                color = MaterialTheme.colorScheme.primary
+                            )
                         }
                     }
                 }
@@ -273,7 +397,7 @@ fun HomeScreen(
                 }
             }
 
-            // Mensaje de Error y Botón de Inicio de Sesión si es requerido
+            // Mensaje de Error y Botón de Inicio de Sesión / Reportar Enlace
             uiState.errorMessage?.let { error ->
                 item {
                     Surface(
@@ -282,29 +406,74 @@ fun HomeScreen(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Column(modifier = Modifier.padding(14.dp)) {
+                            val errorTitle = when {
+                                uiState.isDrmProtected -> "Contenido protegido por DRM"
+                                uiState.isBlobMseUnsupported -> "Reproductor no compatible (MSE / Blob)"
+                                uiState.isPrivateOrDeletedError -> "Contenido no disponible / privado"
+                                else -> "Error al extraer contenido"
+                            }
+                            val errorIcon = when {
+                                uiState.isDrmProtected -> Icons.Filled.Lock
+                                uiState.isBlobMseUnsupported -> Icons.Filled.Block
+                                uiState.isPrivateOrDeletedError -> Icons.Filled.Block
+                                else -> Icons.Filled.ErrorOutline
+                            }
+
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = errorIcon,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.error
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = errorTitle,
+                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onErrorContainer
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
                             Text(
                                 text = error,
                                 color = MaterialTheme.colorScheme.onErrorContainer,
                                 style = MaterialTheme.typography.bodySmall
                             )
-                            if (uiState.isLoginRequiredError) {
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Button(
-                                    onClick = {
-                                        val (targetUrl, name) = when (uiState.detectedPlatform) {
-                                            Platform.TWITTER -> "https://x.com/login" to "Twitter / X"
-                                            Platform.INSTAGRAM -> "https://www.instagram.com/accounts/login/" to "Instagram"
-                                            Platform.FACEBOOK -> "https://m.facebook.com/login/" to "Facebook"
-                                            else -> "https://accounts.google.com/" to "YouTube"
-                                        }
-                                        webViewLoginTarget = targetUrl to name
-                                    },
-                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                                    shape = RoundedCornerShape(10.dp)
+
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                OutlinedButton(
+                                    onClick = { viewModel.reportFailedLink(uiState.urlInput, error) },
+                                    shape = RoundedCornerShape(8.dp),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                                 ) {
-                                    Icon(Icons.Filled.Lock, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Iniciar sesión para descargar este contenido")
+                                    Icon(Icons.Outlined.BugReport, contentDescription = null, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Reportar enlace", style = MaterialTheme.typography.labelSmall)
+                                }
+
+                                if (uiState.isLoginRequiredError) {
+                                    Button(
+                                        onClick = {
+                                            val (targetUrl, name) = when (uiState.detectedPlatform) {
+                                                Platform.TWITTER -> "https://x.com/login" to "Twitter / X"
+                                                Platform.INSTAGRAM -> "https://www.instagram.com/accounts/login/" to "Instagram"
+                                                Platform.FACEBOOK -> "https://m.facebook.com/login/" to "Facebook"
+                                                else -> "https://accounts.google.com/" to "YouTube"
+                                            }
+                                            webViewLoginTarget = targetUrl to name
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                                        shape = RoundedCornerShape(8.dp),
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                                    ) {
+                                        Icon(Icons.Filled.Lock, contentDescription = null, modifier = Modifier.size(14.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Iniciar sesión", style = MaterialTheme.typography.labelSmall)
+                                    }
                                 }
                             }
                         }

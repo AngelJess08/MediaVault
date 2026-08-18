@@ -9,22 +9,31 @@ import com.mediavault.downloader.model.FormatOption
 import com.mediavault.downloader.model.MediaInfo
 import com.mediavault.downloader.model.Platform
 import com.mediavault.downloader.repository.DownloadRepository
+import com.mediavault.downloader.universal.BlobMseUnsupportedException
+import com.mediavault.downloader.universal.DrmProtectedException
 import com.mediavault.storage.datastore.SettingsDataStore
 import com.mediavault.storage.db.entity.DownloadEntity
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import timber.log.Timber
+import java.io.File
 import javax.inject.Inject
 
 data class HomeUiState(
     val urlInput: String = "",
     val detectedPlatform: Platform = Platform.UNKNOWN,
     val isLoading: Boolean = false,
+    val isUniversalModeActive: Boolean = false,
+    val universalModeMessage: String? = null,
     val mediaInfo: MediaInfo? = null,
     val errorMessage: String? = null,
     val isLoginRequiredError: Boolean = false,
+    val isPrivateOrDeletedError: Boolean = false,
+    val isBlobMseUnsupported: Boolean = false,
+    val isDrmProtected: Boolean = false,
     val selectedFormatId: String = "best",
     val selectedResolution: String = "1080p",
     val selectedAudioFormat: String = "none",
@@ -42,7 +51,9 @@ data class HomeUiState(
     val isBatchMode: Boolean = false,
     val batchUrlsText: String = "",
     val showSuccessMessage: String? = null,
-    val duplicateExistingDownload: DownloadEntity? = null
+    val duplicateExistingDownload: DownloadEntity? = null,
+    val detectedClipboardUrl: String? = null,
+    val isBrowserModeEnabled: Boolean = false
 )
 
 @HiltViewModel
@@ -56,6 +67,8 @@ class HomeViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
+    private var analysisJob: Job? = null
+
     val recentDownloads: StateFlow<List<DownloadEntity>> = downloadRepository.historyFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
@@ -66,11 +79,43 @@ class HomeViewModel @Inject constructor(
                     it.copy(
                         wifiOnly = settings.wifiOnlyDownload,
                         speedLimitKbps = settings.downloadSpeedLimit,
-                        isIncognito = settings.isIncognitoMode
+                        isIncognito = settings.isIncognitoMode,
+                        isBrowserModeEnabled = settings.isBrowserModeEnabled
                     )
                 }
             }
         }
+        checkClipboardForVideoUrl()
+    }
+
+    fun checkClipboardForVideoUrl() {
+        try {
+            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            val clip = clipboard.primaryClip
+            if (clip != null && clip.itemCount > 0) {
+                val text = clip.getItemAt(0).text?.toString()?.trim() ?: ""
+                if (text.startsWith("http://", ignoreCase = true) || text.startsWith("https://", ignoreCase = true)) {
+                    val platform = platformDetector.detect(text)
+                    if (platform != Platform.UNKNOWN && text != _uiState.value.urlInput) {
+                        _uiState.update { it.copy(detectedClipboardUrl = text) }
+                        Timber.tag("MediaVaultDebug").d("Enlace en portapapeles detectado: $text ($platform)")
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Timber.tag("MediaVaultDebug").w("No se pudo leer portapapeles: ${e.message}")
+        }
+    }
+
+    fun applyDetectedClipboardUrl() {
+        val detected = _uiState.value.detectedClipboardUrl ?: return
+        _uiState.update { it.copy(detectedClipboardUrl = null) }
+        onUrlChanged(detected)
+        analyzeUrl(detected)
+    }
+
+    fun dismissDetectedClipboardUrl() {
+        _uiState.update { it.copy(detectedClipboardUrl = null) }
     }
 
     fun onUrlChanged(newUrl: String) {
@@ -81,6 +126,9 @@ class HomeViewModel @Inject constructor(
                 detectedPlatform = detected,
                 errorMessage = null,
                 isLoginRequiredError = false,
+                isPrivateOrDeletedError = false,
+                isBlobMseUnsupported = false,
+                isDrmProtected = false,
                 duplicateExistingDownload = null
             )
         }
@@ -98,23 +146,54 @@ class HomeViewModel @Inject constructor(
         }
     }
 
+    fun cancelAnalysis() {
+        analysisJob?.cancel()
+        _uiState.update {
+            it.copy(
+                isLoading = false,
+                isUniversalModeActive = false,
+                universalModeMessage = null
+            )
+        }
+        Timber.tag("MediaVaultUniversalMode").d("Análisis cancelado por el usuario.")
+    }
+
     fun analyzeUrl(url: String = _uiState.value.urlInput) {
         val trimmed = url.trim()
         if (trimmed.isBlank()) return
 
-        viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, errorMessage = null, isLoginRequiredError = false) }
-            Timber.tag("MediaVaultDownload").d("Iniciando análisis de URL: $trimmed")
+        analysisJob?.cancel()
+        analysisJob = viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    isLoading = true,
+                    isUniversalModeActive = false,
+                    universalModeMessage = null,
+                    errorMessage = null,
+                    isLoginRequiredError = false,
+                    isPrivateOrDeletedError = false,
+                    isBlobMseUnsupported = false,
+                    isDrmProtected = false
+                )
+            }
+            Timber.tag("MediaVaultDebug").d("Iniciando análisis de URL: $trimmed")
 
             try {
                 // Verificar duplicados primero
                 val existing = downloadRepository.checkDuplicate(trimmed)
                 if (existing != null) {
-                    Timber.tag("MediaVaultDownload").d("URL duplicada detectada en historial: ${existing.title}")
+                    Timber.tag("MediaVaultDebug").d("URL duplicada detectada en historial: ${existing.title}")
                     _uiState.update { it.copy(duplicateExistingDownload = existing) }
                 }
 
-                val info = downloadRepository.fetchMediaInfo(trimmed)
+                val info = downloadRepository.fetchMediaInfo(trimmed) { statusMsg ->
+                    _uiState.update {
+                        it.copy(
+                            isUniversalModeActive = true,
+                            universalModeMessage = statusMsg
+                        )
+                    }
+                }
 
                 // AUTO-SELECCIÓN DE CALIDAD NATIVA MÁS ALTA POR DEFECTO
                 val videoFormats = info.formats.filter { !it.isAudioOnly }
@@ -127,6 +206,8 @@ class HomeViewModel @Inject constructor(
                 _uiState.update {
                     it.copy(
                         isLoading = false,
+                        isUniversalModeActive = false,
+                        universalModeMessage = null,
                         mediaInfo = info,
                         detectedPlatform = info.platform,
                         selectedFormatId = highestNativeFormat?.formatId ?: "best",
@@ -134,20 +215,48 @@ class HomeViewModel @Inject constructor(
                         isAudioOnly = highestNativeFormat?.isAudioOnly ?: false
                     )
                 }
-                Timber.tag("MediaVaultDownload").d("Calidad nativa más alta preseleccionada: ${highestNativeFormat?.resolution}")
+                Timber.tag("MediaVaultDebug").d("Calidad nativa más alta preseleccionada: ${highestNativeFormat?.resolution}")
 
             } catch (e: Exception) {
                 val errorMsg = e.message ?: "Error al conectar con la plataforma"
-                val isLoginReq = errorMsg.contains("Login requerido", ignoreCase = true) || errorMsg.contains("401") || errorMsg.contains("403")
-                Timber.tag("MediaVaultDownload").e(e, "Error al analizar URL: $errorMsg")
+                val isLoginReq = errorMsg.contains("Login requerido", ignoreCase = true) ||
+                        errorMsg.contains("401") || errorMsg.contains("403") ||
+                        errorMsg.contains("cookies", ignoreCase = true)
+                val isDeletedOrPrivate = errorMsg.contains("privad", ignoreCase = true) ||
+                        errorMsg.contains("borrad", ignoreCase = true) ||
+                        errorMsg.contains("no encontrad", ignoreCase = true) ||
+                        errorMsg.contains("404")
+                val isBlob = e is BlobMseUnsupportedException || errorMsg.contains("Media Source", ignoreCase = true) || errorMsg.contains("blob:", ignoreCase = true)
+                val isDrm = e is DrmProtectedException || errorMsg.contains("DRM", ignoreCase = true) || errorMsg.contains("Widevine", ignoreCase = true)
+
+                Timber.tag("MediaVaultDebug").e(e, "Error al analizar URL: $errorMsg")
 
                 _uiState.update {
                     it.copy(
                         isLoading = false,
+                        isUniversalModeActive = false,
+                        universalModeMessage = null,
                         errorMessage = errorMsg,
-                        isLoginRequiredError = isLoginReq
+                        isLoginRequiredError = isLoginReq,
+                        isPrivateOrDeletedError = isDeletedOrPrivate,
+                        isBlobMseUnsupported = isBlob,
+                        isDrmProtected = isDrm
                     )
                 }
+            }
+        }
+    }
+
+    fun reportFailedLink(url: String, error: String) {
+        viewModelScope.launch {
+            try {
+                val reportFile = File(context.cacheDir, "failed_links_report.log")
+                val logEntry = "[${System.currentTimeMillis()}] URL: $url | Error: $error\n"
+                reportFile.appendText(logEntry)
+                Timber.tag("MediaVaultDebug").d("Enlace fallido reportado y guardado localmente: $url")
+                _uiState.update { it.copy(showSuccessMessage = "Enlace reportado localmente para depuración.") }
+            } catch (e: Exception) {
+                Timber.tag("MediaVaultDebug").e(e, "Error al guardar reporte de enlace")
             }
         }
     }
@@ -255,7 +364,7 @@ class HomeViewModel @Inject constructor(
                     )
                 }
             } catch (e: Exception) {
-                Timber.tag("MediaVaultDownload").e(e, "Error al encolar descarga")
+                Timber.tag("MediaVaultDebug").e(e, "Error al encolar descarga")
                 _uiState.update { it.copy(errorMessage = "Error al iniciar descarga: ${e.message}") }
             }
         }

@@ -6,12 +6,16 @@ import com.mediavault.downloader.detector.PlatformDetector
 import com.mediavault.downloader.model.FormatOption
 import com.mediavault.downloader.model.MediaInfo
 import com.mediavault.downloader.model.Platform
+import com.mediavault.downloader.universal.UniversalWebViewSniffer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import timber.log.Timber
 import java.net.URLDecoder
+import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 import java.util.regex.Pattern
 import javax.inject.Inject
@@ -19,7 +23,8 @@ import javax.inject.Singleton
 
 @Singleton
 class UniversalMediaExtractor @Inject constructor(
-    private val platformDetector: PlatformDetector
+    private val platformDetector: PlatformDetector,
+    private val universalWebViewSniffer: UniversalWebViewSniffer
 ) {
     private val gson = Gson()
     private val client = OkHttpClient.Builder()
@@ -34,44 +39,119 @@ class UniversalMediaExtractor @Inject constructor(
     private val userAgentMobile =
         "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
 
-    suspend fun extract(url: String, cookieHeader: String? = null): MediaInfo = withContext(Dispatchers.IO) {
-        val platform = platformDetector.detect(url)
-        Timber.tag("MediaVaultDownload").d("Iniciando extracción para plataforma: $platform, URL: $url")
+    suspend fun extract(
+        rawUrl: String,
+        cookieHeader: String? = null,
+        onStatusUpdate: ((String) -> Unit)? = null
+    ): MediaInfo = withContext(Dispatchers.IO) {
+        Timber.tag("MediaVaultDebug").d("==================================================")
+        Timber.tag("MediaVaultDebug").d("Paso 1: URL recibida -> $rawUrl")
+
+        // 1. Resolver redirecciones de URLs acortadas
+        val resolvedUrl = platformDetector.resolveRedirects(rawUrl)
+        val platform = platformDetector.detect(resolvedUrl)
+        Timber.tag("MediaVaultDebug").d("Paso 2: Dominio y plataforma resueltos -> $platform para $resolvedUrl")
+
+        // 2. Si la plataforma es conocida, intentar primero el extractor especializado
+        if (platform != Platform.UNKNOWN && platform != Platform.GENERIC) {
+            Timber.tag("MediaVaultDebug").d("Paso 3: Intentando extractor especializado para $platform...")
+            try {
+                val mediaInfo = when (platform) {
+                    Platform.YOUTUBE -> extractYouTube(resolvedUrl, cookieHeader)
+                    Platform.TIKTOK -> extractTikTok(resolvedUrl, cookieHeader)
+                    Platform.TWITTER -> extractTwitter(resolvedUrl, cookieHeader)
+                    Platform.INSTAGRAM -> extractInstagram(resolvedUrl, cookieHeader)
+                    Platform.FACEBOOK -> extractFacebook(resolvedUrl, cookieHeader)
+                    Platform.REDDIT -> extractReddit(resolvedUrl, cookieHeader)
+                    Platform.VIMEO -> extractVimeo(resolvedUrl, cookieHeader)
+                    Platform.SOUNDCLOUD -> extractSoundCloud(resolvedUrl, cookieHeader)
+                    else -> null
+                }
+
+                if (mediaInfo != null && mediaInfo.formats.isNotEmpty()) {
+                    Timber.tag("MediaVaultDebug").d("Paso 4: Extracción especializada exitosa. Título: '${mediaInfo.title}', Formatos: ${mediaInfo.formats.size}")
+                    mediaInfo.formats.forEach { fmt ->
+                        Timber.tag("MediaVaultDebug").d("   -> Formato: ${fmt.resolution ?: fmt.formatId} (${fmt.ext}), Stream: ${fmt.streamUrl?.take(60)}...")
+                    }
+                    return@withContext mediaInfo
+                }
+            } catch (e: Exception) {
+                Timber.tag("MediaVaultDebug").w("Extractor especializado de $platform falló: ${e.message}. Activando respaldo con Modo Universal...")
+            }
+        }
+
+        // 3. Verificar si es un enlace directo a archivo multimedia (.mp4, .mp3, .m3u8, etc.)
+        val lowerUrl = resolvedUrl.lowercase()
+        val isDirectMediaFile = lowerUrl.endsWith(".mp4") || lowerUrl.endsWith(".webm") ||
+                lowerUrl.endsWith(".mp3") || lowerUrl.endsWith(".m4a") ||
+                lowerUrl.endsWith(".m3u8") || lowerUrl.endsWith(".ts") ||
+                lowerUrl.endsWith(".wav") || lowerUrl.endsWith(".ogg") || lowerUrl.endsWith(".flac")
+
+        if (isDirectMediaFile) {
+            Timber.tag("MediaVaultDebug").d("Enlace directo a archivo multimedia detectado.")
+            return@withContext extractGenericOrDirect(resolvedUrl, cookieHeader)
+        }
+
+        // 4. MODO UNIVERSAL (WebView Sniffer de Respaldo)
+        Timber.tag("MediaVaultUniversalMode").d("Activando Modo Universal de respaldo para: $resolvedUrl")
+        onStatusUpdate?.invoke("No reconocí este sitio directamente, buscando el video de otra forma...")
 
         try {
-            when (platform) {
-                Platform.YOUTUBE -> extractYouTube(url, cookieHeader)
-                Platform.TIKTOK -> extractTikTok(url, cookieHeader)
-                Platform.TWITTER -> extractTwitter(url, cookieHeader)
-                Platform.INSTAGRAM -> extractInstagram(url, cookieHeader)
-                Platform.FACEBOOK -> extractFacebook(url, cookieHeader)
-                Platform.REDDIT -> extractReddit(url, cookieHeader)
-                Platform.VIMEO -> extractVimeo(url, cookieHeader)
-                Platform.SOUNDCLOUD -> extractSoundCloud(url, cookieHeader)
-                else -> extractGenericOrDirect(url, cookieHeader)
-            }
+            return@withContext extractWithUniversalSniffer(resolvedUrl, cookieHeader, platform)
         } catch (e: Exception) {
-            Timber.tag("MediaVaultDownload").e(e, "Error al extraer info de $platform: ${e.message}")
-            // Fallback robusto con formatos nativos ordenados
-            generateFallbackMediaInfo(url, platform, e.message)
+            Timber.tag("MediaVaultUniversalMode").e(e, "Modo Universal finalizó con error para $resolvedUrl: ${e.message}")
+            throw e
         }
     }
 
+    private suspend fun extractWithUniversalSniffer(
+        url: String,
+        cookieHeader: String?,
+        platform: Platform
+    ): MediaInfo {
+        val candidates = universalWebViewSniffer.sniff(url, cookieHeader)
+
+        val formats = candidates.mapIndexed { index, candidate ->
+            FormatOption(
+                formatId = "univ_${candidate.extension}_$index",
+                ext = candidate.extension,
+                resolution = candidate.estimatedResolution ?: if (candidate.isAudioOnly) "Audio (${candidate.extension})" else "Video Web (${candidate.extension})",
+                isAudioOnly = candidate.isAudioOnly,
+                isNative = true,
+                filesizeApprox = candidate.contentLength ?: if (candidate.isAudioOnly) (5 * 1024 * 1024L) else (25 * 1024 * 1024L),
+                streamUrl = candidate.url
+            )
+        }
+
+        val title = candidates.firstOrNull()?.title ?: "Video Web Descubierto"
+        val author = platformDetector.extractDomain(url)
+
+        return MediaInfo(
+            url = url,
+            title = title,
+            platform = if (platform != Platform.UNKNOWN) platform else Platform.GENERIC,
+            uploader = author,
+            formats = formats
+        )
+    }
+
+    // ==========================================
+    // YOUTUBE EXTRACTOR (Piped / Cobalt / Invidious / oEmbed)
+    // ==========================================
     private fun extractYouTube(url: String, cookieHeader: String?): MediaInfo {
-        Timber.tag("MediaVaultDownload").d("Extrayendo metadata de YouTube...")
-        val videoId = extractYouTubeId(url) ?: "video"
-        
-        // Consultar oEmbed oficial de YouTube para metadata limpia
-        var title = "YouTube Video ($videoId)"
+        val videoId = extractYouTubeId(url) ?: throw Exception("No se pudo identificar el ID del video de YouTube.")
+        Timber.tag("MediaVaultDebug").d("YouTube ID detectado: $videoId")
+
+        var title = "Video de YouTube"
         var author = "YouTube Creator"
         var thumbnail = "https://img.youtube.com/vi/$videoId/maxresdefault.jpg"
+        var duration = 0L
+        val formats = mutableListOf<FormatOption>()
 
+        // 1. Obtener metadata de oEmbed
         try {
             val oembedUrl = "https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=$videoId&format=json"
-            val request = Request.Builder()
-                .url(oembedUrl)
-                .header("User-Agent", userAgentBrowser)
-                .build()
+            val request = Request.Builder().url(oembedUrl).header("User-Agent", userAgentBrowser).build()
             client.newCall(request).execute().use { response ->
                 if (response.isSuccessful) {
                     val body = response.body?.string()
@@ -84,436 +164,713 @@ class UniversalMediaExtractor @Inject constructor(
                 }
             }
         } catch (e: Exception) {
-            Timber.tag("MediaVaultDownload").w("No se pudo obtener oEmbed de YouTube: ${e.message}")
+            Timber.tag("MediaVaultDebug").w("oEmbed fallback: ${e.message}")
         }
 
-        // Generar lista exhaustiva de calidades NATIVAS ordenadas de mayor a menor
-        val formats = listOf(
-            FormatOption(
-                formatId = "yt_2160p",
-                ext = "mp4",
-                resolution = "4K (2160p)",
-                fps = 60f,
-                vcodec = "av01/vp9",
-                acodec = "aac",
-                height = 2160,
-                width = 3840,
-                isNative = true,
-                filesizeApprox = 450 * 1024 * 1024L,
-                streamUrl = url
-            ),
-            FormatOption(
-                formatId = "yt_1440p",
-                ext = "mp4",
-                resolution = "2K (1440p)",
-                fps = 60f,
-                vcodec = "vp9",
-                acodec = "aac",
-                height = 1440,
-                width = 2560,
-                isNative = true,
-                filesizeApprox = 220 * 1024 * 1024L,
-                streamUrl = url
-            ),
-            FormatOption(
-                formatId = "yt_1080p",
-                ext = "mp4",
-                resolution = "1080p FHD",
-                fps = 60f,
-                vcodec = "h264",
-                acodec = "aac",
-                height = 1080,
-                width = 1920,
-                isNative = true,
-                filesizeApprox = 95 * 1024 * 1024L,
-                streamUrl = url
-            ),
-            FormatOption(
-                formatId = "yt_720p",
-                ext = "mp4",
-                resolution = "720p HD",
-                fps = 30f,
-                vcodec = "h264",
-                acodec = "aac",
-                height = 720,
-                width = 1280,
-                isNative = true,
-                filesizeApprox = 45 * 1024 * 1024L,
-                streamUrl = url
-            ),
-            FormatOption(
-                formatId = "yt_480p",
-                ext = "mp4",
-                resolution = "480p SD",
-                fps = 30f,
-                vcodec = "h264",
-                acodec = "aac",
-                height = 480,
-                width = 854,
-                isNative = true,
-                filesizeApprox = 25 * 1024 * 1024L,
-                streamUrl = url
-            ),
-            FormatOption(
-                formatId = "yt_360p",
-                ext = "mp4",
-                resolution = "360p",
-                fps = 30f,
-                vcodec = "h264",
-                acodec = "aac",
-                height = 360,
-                width = 640,
-                isNative = true,
-                filesizeApprox = 15 * 1024 * 1024L,
-                streamUrl = url
-            ),
-            FormatOption(
-                formatId = "yt_audio_320",
-                ext = "mp3",
-                resolution = null,
-                vcodec = null,
-                acodec = "mp3",
-                abr = 320f,
-                isAudioOnly = true,
-                isNative = true,
-                filesizeApprox = 10 * 1024 * 1024L,
-                streamUrl = url
-            )
+        // 2. Intentar consultar Piped / Invidious API para obtener streams directos de googlevideo.com
+        val pipedInstances = listOf(
+            "https://pipedapi.kavin.rocks/streams/$videoId",
+            "https://api.piped.privacy.com.de/streams/$videoId",
+            "https://pipedapi.tokhmi.xyz/streams/$videoId",
+            "https://yewtu.be/api/v1/videos/$videoId"
         )
 
-        Timber.tag("MediaVaultDownload").d("YouTube extraído: '$title' con ${formats.size} calidades nativas.")
+        for (pipedUrl in pipedInstances) {
+            try {
+                Timber.tag("MediaVaultDebug").d("Consultando API de stream YouTube: $pipedUrl")
+                val request = Request.Builder()
+                    .url(pipedUrl)
+                    .header("User-Agent", userAgentBrowser)
+                    .build()
+
+                client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val body = response.body?.string()
+                        if (!body.isNullOrBlank()) {
+                            val json = gson.fromJson(body, JsonObject::class.java)
+                            title = json.get("title")?.asString ?: title
+                            author = json.get("uploader")?.asString ?: author
+                            duration = json.get("duration")?.asLong ?: duration
+                            thumbnail = json.get("thumbnailUrl")?.asString ?: thumbnail
+
+                            val videoStreams = json.getAsJsonArray("videoStreams")
+                            val audioStreams = json.getAsJsonArray("audioStreams")
+
+                            if (videoStreams != null && videoStreams.size() > 0) {
+                                for (elem in videoStreams) {
+                                    val obj = elem.asJsonObject
+                                    val streamUrl = obj.get("url")?.asString ?: continue
+                                    val quality = obj.get("quality")?.asString ?: "Video"
+                                    val height = obj.get("height")?.asInt ?: 1080
+                                    val fps = obj.get("fps")?.asFloat ?: 30f
+                                    val ext = obj.get("format")?.asString ?: "mp4"
+                                    val codec = obj.get("codec")?.asString ?: "h264"
+                                    val filesize = obj.get("contentLength")?.asLong ?: (height * 100000L)
+
+                                    formats.add(
+                                        FormatOption(
+                                            formatId = "yt_${height}p_${ext}",
+                                            ext = if (ext.contains("mp4", ignoreCase = true)) "mp4" else "webm",
+                                            resolution = "$quality ($ext)",
+                                            fps = fps,
+                                            height = height,
+                                            width = (height * 16) / 9,
+                                            vcodec = codec,
+                                            isNative = true,
+                                            filesizeApprox = filesize,
+                                            streamUrl = streamUrl
+                                        )
+                                    )
+                                }
+                            }
+
+                            if (audioStreams != null && audioStreams.size() > 0) {
+                                for (elem in audioStreams) {
+                                    val obj = elem.asJsonObject
+                                    val streamUrl = obj.get("url")?.asString ?: continue
+                                    val bitrate = obj.get("bitrate")?.asInt ?: 128
+                                    val ext = obj.get("format")?.asString ?: "m4a"
+
+                                    formats.add(
+                                        FormatOption(
+                                            formatId = "yt_audio_${bitrate}",
+                                            ext = "mp3",
+                                            resolution = null,
+                                            isAudioOnly = true,
+                                            abr = (bitrate / 1000).toFloat(),
+                                            isNative = true,
+                                            filesizeApprox = 5 * 1024 * 1024L,
+                                            streamUrl = streamUrl
+                                        )
+                                    )
+                                }
+                            }
+
+                            if (formats.isNotEmpty()) {
+                                Timber.tag("MediaVaultDebug").d("Streams de YouTube obtenidos con éxito de $pipedUrl (${formats.size} formatos)")
+                            }
+                        }
+                    }
+                }
+                if (formats.isNotEmpty()) {
+                    break
+                }
+            } catch (e: Exception) {
+                Timber.tag("MediaVaultDebug").w("Error en instancia $pipedUrl: ${e.message}")
+            }
+        }
+
+        // 3. Fallback con Cobalt API
+        if (formats.isEmpty()) {
+            try {
+                Timber.tag("MediaVaultDebug").d("Consultando Cobalt API para YouTube...")
+                val cobaltJson = JsonObject().apply {
+                    addProperty("url", "https://www.youtube.com/watch?v=$videoId")
+                    addProperty("videoQuality", "max")
+                }
+                val body = cobaltJson.toString().toRequestBody("application/json".toMediaType())
+                val request = Request.Builder()
+                    .url("https://api.cobalt.tools/")
+                    .header("Accept", "application/json")
+                    .header("Content-Type", "application/json")
+                    .header("User-Agent", userAgentBrowser)
+                    .post(body)
+                    .build()
+
+                client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val respBody = response.body?.string()
+                        if (!respBody.isNullOrBlank()) {
+                            val json = gson.fromJson(respBody, JsonObject::class.java)
+                            val streamUrl = json.get("url")?.asString
+                            if (!streamUrl.isNullOrBlank()) {
+                                formats.add(
+                                    FormatOption(
+                                        formatId = "yt_cobalt_max",
+                                        ext = "mp4",
+                                        resolution = "Máxima Calidad (Original)",
+                                        isNative = true,
+                                        filesizeApprox = 35 * 1024 * 1024L,
+                                        streamUrl = streamUrl
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Timber.tag("MediaVaultDebug").w("Cobalt API fallo para YouTube: ${e.message}")
+            }
+        }
+
+        if (formats.isEmpty()) {
+            throw Exception("No se pudieron resolver los streams directos de YouTube. Verifique la conexión.")
+        }
 
         return MediaInfo(
             url = url,
             title = title,
-            description = "Video de YouTube por $author",
             thumbnailUrl = thumbnail,
-            duration = 240L,
+            duration = duration,
             platform = Platform.YOUTUBE,
             uploader = author,
-            formats = formats
+            formats = formats.sortedByDescending { it.height ?: 0 }
         )
     }
 
+    // ==========================================
+    // TIKTOK EXTRACTOR (TikWM API)
+    // ==========================================
     private fun extractTikTok(url: String, cookieHeader: String?): MediaInfo {
-        Timber.tag("MediaVaultDownload").d("Extrayendo metadata y stream sin marca de agua de TikTok...")
-        var directVideoUrl: String? = null
-        var title = "TikTok Video"
-        var author = "TikTok User"
-        var thumbnail: String? = null
+        Timber.tag("MediaVaultDebug").d("Extrayendo video de TikTok vía TikWM...")
+        val encodedUrl = URLEncoder.encode(url, "UTF-8")
+        val apiUrl = "https://www.tikwm.com/api/?url=$encodedUrl"
 
+        val request = Request.Builder()
+            .url(apiUrl)
+            .header("User-Agent", userAgentBrowser)
+            .build()
+
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw Exception("Error al conectar con la API de TikTok (HTTP ${response.code})")
+
+            val body = response.body?.string() ?: throw Exception("Respuesta vacía de TikTok")
+            val json = gson.fromJson(body, JsonObject::class.java)
+            val code = json.get("code")?.asInt ?: -1
+
+            if (code != 0) {
+                val msg = json.get("msg")?.asString ?: "Video no encontrado o privado"
+                throw Exception("TikTok API: $msg")
+            }
+
+            val data = json.getAsJsonObject("data") ?: throw Exception("Formato inválido de TikTok")
+            val title = data.get("title")?.asString ?: "TikTok Video"
+            val author = data.getAsJsonObject("author")?.get("nickname")?.asString ?: "TikTok User"
+            val duration = data.get("duration")?.asLong ?: 0L
+            val thumbnail = data.get("cover")?.asString
+
+            val playUrl = data.get("play")?.asString
+            val hdPlayUrl = data.get("hdplay")?.asString
+            val musicUrl = data.get("music")?.asString
+
+            val formats = mutableListOf<FormatOption>()
+
+            if (!hdPlayUrl.isNullOrBlank()) {
+                val fullHdUrl = if (hdPlayUrl.startsWith("http")) hdPlayUrl else "https://www.tikwm.com$hdPlayUrl"
+                formats.add(
+                    FormatOption(
+                        formatId = "tt_hd_nowm",
+                        ext = "mp4",
+                        resolution = "HD Sin Marca de Agua (1080p)",
+                        height = 1080,
+                        isNative = true,
+                        filesizeApprox = data.get("hd_size")?.asLong ?: (20 * 1024 * 1024L),
+                        streamUrl = fullHdUrl
+                    )
+                )
+            }
+
+            if (!playUrl.isNullOrBlank()) {
+                val fullPlayUrl = if (playUrl.startsWith("http")) playUrl else "https://www.tikwm.com$playUrl"
+                formats.add(
+                    FormatOption(
+                        formatId = "tt_sd_nowm",
+                        ext = "mp4",
+                        resolution = "SD Sin Marca de Agua (720p)",
+                        height = 720,
+                        isNative = true,
+                        filesizeApprox = data.get("size")?.asLong ?: (10 * 1024 * 1024L),
+                        streamUrl = fullPlayUrl
+                    )
+                )
+            }
+
+            if (!musicUrl.isNullOrBlank()) {
+                val fullMusicUrl = if (musicUrl.startsWith("http")) musicUrl else "https://www.tikwm.com$musicUrl"
+                formats.add(
+                    FormatOption(
+                        formatId = "tt_audio",
+                        ext = "mp3",
+                        resolution = null,
+                        isAudioOnly = true,
+                        isNative = true,
+                        filesizeApprox = 3 * 1024 * 1024L,
+                        streamUrl = fullMusicUrl
+                    )
+                )
+            }
+
+            if (formats.isEmpty()) {
+                throw Exception("No se encontraron URLs de descarga para este video de TikTok.")
+            }
+
+            return MediaInfo(
+                url = url,
+                title = title,
+                thumbnailUrl = thumbnail,
+                duration = duration,
+                platform = Platform.TIKTOK,
+                uploader = author,
+                formats = formats
+            )
+        }
+    }
+
+    // ==========================================
+    // TWITTER / X EXTRACTOR (VxTwitter / Syndication)
+    // ==========================================
+    private fun extractTwitter(url: String, cookieHeader: String?): MediaInfo {
+        Timber.tag("MediaVaultDebug").d("Extrayendo video de Twitter/X...")
+        val tweetId = extractTwitterId(url) ?: throw Exception("ID de tweet no encontrado.")
+
+        // 1. Intentar vía API de VxTwitter
         try {
-            // Consulta a endpoint de resolución limpia de TikTok
-            val apiUrl = "https://www.tikwm.com/api/?url=${url}"
-            val request = Request.Builder()
-                .url(apiUrl)
-                .header("User-Agent", userAgentBrowser)
-                .apply {
-                    if (!cookieHeader.isNullOrBlank()) header("Cookie", cookieHeader)
-                }
-                .build()
-
+            val vxUrl = "https://api.vxtwitter.com/Twitter/status/$tweetId"
+            val request = Request.Builder().url(vxUrl).header("User-Agent", userAgentBrowser).build()
             client.newCall(request).execute().use { response ->
                 if (response.isSuccessful) {
                     val body = response.body?.string()
                     if (!body.isNullOrBlank()) {
                         val json = gson.fromJson(body, JsonObject::class.java)
-                        val data = json.getAsJsonObject("data")
-                        if (data != null) {
-                            title = data.get("title")?.asString?.takeIf { it.isNotBlank() } ?: "TikTok Video"
-                            directVideoUrl = data.get("play")?.asString ?: data.get("wmplay")?.asString
-                            author = data.getAsJsonObject("author")?.get("nickname")?.asString ?: author
-                            thumbnail = data.get("cover")?.asString
+                        val text = json.get("text")?.asString ?: "Tweet de X ($tweetId)"
+                        val author = json.get("user_name")?.asString ?: "Usuario de X"
+                        val mediaUrl = json.get("media_url")?.asString
+                        val mediaType = json.get("media_type")?.asString
+
+                        val formats = mutableListOf<FormatOption>()
+                        if (!mediaUrl.isNullOrBlank() && (mediaType == "video" || mediaUrl.contains(".mp4") || mediaUrl.contains(".m3u8"))) {
+                            formats.add(
+                                FormatOption(
+                                    formatId = "tw_vx_hd",
+                                    ext = if (mediaUrl.contains(".m3u8")) "m3u8" else "mp4",
+                                    resolution = "HD Calidad Original",
+                                    isNative = true,
+                                    filesizeApprox = 15 * 1024 * 1024L,
+                                    streamUrl = mediaUrl
+                                )
+                            )
+
+                            return MediaInfo(
+                                url = url,
+                                title = text.take(60),
+                                thumbnailUrl = json.get("media_thumb_url")?.asString,
+                                platform = Platform.TWITTER,
+                                uploader = author,
+                                formats = formats
+                            )
                         }
                     }
                 }
             }
         } catch (e: Exception) {
-            Timber.tag("MediaVaultDownload").w("Error consultando TikWM: ${e.message}")
+            Timber.tag("MediaVaultDebug").w("VxTwitter fallback: ${e.message}")
         }
 
-        val formats = listOf(
-            FormatOption(
-                formatId = "tt_hd_nowatermark",
-                ext = "mp4",
-                resolution = "1080p HD (Sin Marca)",
-                fps = 60f,
-                vcodec = "h264",
-                acodec = "aac",
-                height = 1080,
-                width = 1920,
-                isNative = true,
-                filesizeApprox = 18 * 1024 * 1024L,
-                streamUrl = directVideoUrl ?: url
-            ),
-            FormatOption(
-                formatId = "tt_720p",
-                ext = "mp4",
-                resolution = "720p HD",
-                fps = 30f,
-                vcodec = "h264",
-                acodec = "aac",
-                height = 720,
-                width = 1280,
-                isNative = true,
-                filesizeApprox = 10 * 1024 * 1024L,
-                streamUrl = directVideoUrl ?: url
-            ),
-            FormatOption(
-                formatId = "tt_audio",
-                ext = "mp3",
-                resolution = null,
-                isAudioOnly = true,
-                isNative = true,
-                filesizeApprox = 3 * 1024 * 1024L,
-                streamUrl = directVideoUrl ?: url
-            )
-        )
-
-        return MediaInfo(
-            url = url,
-            title = title,
-            thumbnailUrl = thumbnail,
-            duration = 45L,
-            platform = Platform.TIKTOK,
-            uploader = author,
-            formats = formats
-        )
-    }
-
-    private fun extractTwitter(url: String, cookieHeader: String?): MediaInfo {
-        Timber.tag("MediaVaultDownload").d("Extrayendo tweet y video de Twitter/X...")
-        val tweetId = extractTwitterId(url) ?: "tweet"
-        var title = "Twitter/X Video ($tweetId)"
-        var author = "Twitter User"
-        var directStream: String? = null
-
+        // 2. Intentar vía Syndication API
         try {
-            // Intentar syndication API o FixupX
-            val apiUrl = "https://api.vxtwitter.com/Twitter/status/$tweetId"
-            val request = Request.Builder()
-                .url(apiUrl)
-                .header("User-Agent", userAgentBrowser)
-                .apply {
-                    if (!cookieHeader.isNullOrBlank()) header("Cookie", cookieHeader)
-                }
-                .build()
-
+            val syndicationUrl = "https://cdn.syndication.twimg.com/tweet-result?id=$tweetId&lang=en"
+            val request = Request.Builder().url(syndicationUrl).header("User-Agent", userAgentBrowser).build()
             client.newCall(request).execute().use { response ->
                 if (response.isSuccessful) {
                     val body = response.body?.string()
                     if (!body.isNullOrBlank()) {
                         val json = gson.fromJson(body, JsonObject::class.java)
-                        title = json.get("text")?.asString?.take(80) ?: title
-                        author = json.get("user_name")?.asString ?: author
-                        directStream = json.get("video_url")?.asString
+                        val text = json.get("text")?.asString ?: "Tweet Video"
+                        val user = json.getAsJsonObject("user")?.get("name")?.asString ?: "Twitter"
+                        val mediaEntities = json.getAsJsonArray("mediaEntities")
+
+                        val formats = mutableListOf<FormatOption>()
+                        if (mediaEntities != null && mediaEntities.size() > 0) {
+                            for (elem in mediaEntities) {
+                                val obj = elem.asJsonObject
+                                val videoInfo = obj.getAsJsonObject("video_info")
+                                val variants = videoInfo?.getAsJsonArray("variants")
+                                if (variants != null) {
+                                    for (v in variants) {
+                                        val vObj = v.asJsonObject
+                                        val streamUrl = vObj.get("url")?.asString ?: continue
+                                        val contentType = vObj.get("content_type")?.asString ?: ""
+                                        val bitrate = vObj.get("bitrate")?.asLong ?: 0L
+
+                                        if (contentType == "video/mp4") {
+                                            formats.add(
+                                                FormatOption(
+                                                    formatId = "tw_mp4_${bitrate}",
+                                                    ext = "mp4",
+                                                    resolution = if (bitrate > 1000000) "1080p / 720p HD" else "480p / 360p SD",
+                                                    isNative = true,
+                                                    filesizeApprox = 10 * 1024 * 1024L,
+                                                    streamUrl = streamUrl
+                                                )
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if (formats.isNotEmpty()) {
+                            return MediaInfo(
+                                url = url,
+                                title = text.take(60),
+                                platform = Platform.TWITTER,
+                                uploader = user,
+                                formats = formats.sortedByDescending { it.filesizeApprox ?: 0L }
+                            )
+                        }
                     }
                 }
             }
         } catch (e: Exception) {
-            Timber.tag("MediaVaultDownload").w("Error consultando API Twitter: ${e.message}")
+            Timber.tag("MediaVaultDebug").w("Syndication fallback: ${e.message}")
         }
 
-        val formats = listOf(
-            FormatOption(
-                formatId = "tw_1080p",
-                ext = "mp4",
-                resolution = "1080p FHD",
-                fps = 60f,
-                vcodec = "h264",
-                acodec = "aac",
-                height = 1080,
-                width = 1920,
-                isNative = true,
-                filesizeApprox = 24 * 1024 * 1024L,
-                streamUrl = directStream ?: url
-            ),
-            FormatOption(
-                formatId = "tw_720p",
-                ext = "mp4",
-                resolution = "720p HD",
-                fps = 30f,
-                vcodec = "h264",
-                acodec = "aac",
-                height = 720,
-                width = 1280,
-                isNative = true,
-                filesizeApprox = 12 * 1024 * 1024L,
-                streamUrl = directStream ?: url
-            ),
-            FormatOption(
-                formatId = "tw_audio",
-                ext = "mp3",
-                isAudioOnly = true,
-                isNative = true,
-                filesizeApprox = 4 * 1024 * 1024L,
-                streamUrl = directStream ?: url
-            )
-        )
-
-        return MediaInfo(
-            url = url,
-            title = title,
-            platform = Platform.TWITTER,
-            uploader = author,
-            formats = formats
-        )
+        throw Exception("No se pudo extraer el video de Twitter/X. El tweet podría ser privado o no contener video.")
     }
 
+    // ==========================================
+    // INSTAGRAM EXTRACTOR (Cobalt API / Scraping)
+    // ==========================================
     private fun extractInstagram(url: String, cookieHeader: String?): MediaInfo {
-        Timber.tag("MediaVaultDownload").d("Extrayendo Reel / Post de Instagram...")
-        val formats = listOf(
-            FormatOption(
-                formatId = "ig_1080p",
-                ext = "mp4",
-                resolution = "1080p FHD (Nativo)",
-                fps = 30f,
-                height = 1080,
-                width = 1080,
-                isNative = true,
-                filesizeApprox = 18 * 1024 * 1024L,
-                streamUrl = url
-            ),
-            FormatOption(
-                formatId = "ig_720p",
-                ext = "mp4",
-                resolution = "720p HD",
-                fps = 30f,
-                height = 720,
-                width = 720,
-                isNative = true,
-                filesizeApprox = 9 * 1024 * 1024L,
-                streamUrl = url
-            ),
-            FormatOption(
-                formatId = "ig_audio",
-                ext = "m4a",
-                isAudioOnly = true,
-                isNative = true,
-                filesizeApprox = 3 * 1024 * 1024L,
-                streamUrl = url
-            )
-        )
-        return MediaInfo(
-            url = url,
-            title = "Instagram Reel",
-            platform = Platform.INSTAGRAM,
-            uploader = "Instagram Creator",
-            formats = formats
-        )
+        Timber.tag("MediaVaultDebug").d("Extrayendo video de Instagram...")
+
+        // 1. Intentar con Cobalt API
+        try {
+            val cobaltJson = JsonObject().apply {
+                addProperty("url", url)
+                addProperty("videoQuality", "max")
+            }
+            val body = cobaltJson.toString().toRequestBody("application/json".toMediaType())
+            val request = Request.Builder()
+                .url("https://api.cobalt.tools/")
+                .header("Accept", "application/json")
+                .header("Content-Type", "application/json")
+                .header("User-Agent", userAgentBrowser)
+                .post(body)
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    val respBody = response.body?.string()
+                    if (!respBody.isNullOrBlank()) {
+                        val json = gson.fromJson(respBody, JsonObject::class.java)
+                        val streamUrl = json.get("url")?.asString
+                        if (!streamUrl.isNullOrBlank()) {
+                            val formats = listOf(
+                                FormatOption(
+                                    formatId = "ig_cobalt_hd",
+                                    ext = "mp4",
+                                    resolution = "HD Calidad Original (Instagram)",
+                                    isNative = true,
+                                    filesizeApprox = 20 * 1024 * 1024L,
+                                    streamUrl = streamUrl
+                                )
+                            )
+                            return MediaInfo(
+                                url = url,
+                                title = "Instagram Reel / Post",
+                                platform = Platform.INSTAGRAM,
+                                uploader = "Instagram Creator",
+                                formats = formats
+                            )
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Timber.tag("MediaVaultDebug").w("Cobalt API fallo para Instagram: ${e.message}")
+        }
+
+        // 2. Scraping directo con cookies
+        val cleanUrl = if (url.contains("?")) url.substring(0, url.indexOf("?")) else url
+        val target = if (!cleanUrl.endsWith("/")) "$cleanUrl/" else cleanUrl
+        val reqBuilder = Request.Builder()
+            .url("${target}?__a=1&__d=dis")
+            .header("User-Agent", userAgentBrowser)
+
+        if (!cookieHeader.isNullOrBlank()) {
+            reqBuilder.header("Cookie", cookieHeader)
+        }
+
+        try {
+            client.newCall(reqBuilder.build()).execute().use { response ->
+                val body = response.body?.string()
+                if (response.isSuccessful && !body.isNullOrBlank()) {
+                    val pattern = Pattern.compile("\"video_url\":\"(https:[^\"\\\\]+)\"")
+                    val matcher = pattern.matcher(body)
+                    if (matcher.find()) {
+                        val stream = matcher.group(1)?.replace("\\u0026", "&")
+                        if (!stream.isNullOrBlank()) {
+                            val formats = listOf(
+                                FormatOption(
+                                    formatId = "ig_scraped_hd",
+                                    ext = "mp4",
+                                    resolution = "HD Calidad Original",
+                                    isNative = true,
+                                    filesizeApprox = 15 * 1024 * 1024L,
+                                    streamUrl = stream
+                                )
+                            )
+                            return MediaInfo(
+                                url = url,
+                                title = "Instagram Video",
+                                platform = Platform.INSTAGRAM,
+                                uploader = "Instagram",
+                                formats = formats
+                            )
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Timber.tag("MediaVaultDebug").w("Scraping Instagram fallo: ${e.message}")
+        }
+
+        throw Exception("Instagram requiere inicio de sesión (Cookies) o la cuenta es privada.")
     }
 
+    // ==========================================
+    // FACEBOOK EXTRACTOR
+    // ==========================================
     private fun extractFacebook(url: String, cookieHeader: String?): MediaInfo {
-        Timber.tag("MediaVaultDownload").d("Extrayendo video de Facebook...")
-        val formats = listOf(
-            FormatOption(
-                formatId = "fb_hd",
-                ext = "mp4",
-                resolution = "1080p HD",
-                height = 1080,
-                isNative = true,
-                filesizeApprox = 32 * 1024 * 1024L,
-                streamUrl = url
-            ),
-            FormatOption(
-                formatId = "fb_sd",
-                ext = "mp4",
-                resolution = "480p SD",
-                height = 480,
-                isNative = true,
-                filesizeApprox = 14 * 1024 * 1024L,
-                streamUrl = url
-            ),
-            FormatOption(
-                formatId = "fb_audio",
-                ext = "mp3",
-                isAudioOnly = true,
-                isNative = true,
-                filesizeApprox = 5 * 1024 * 1024L,
-                streamUrl = url
+        Timber.tag("MediaVaultDebug").d("Extrayendo video de Facebook...")
+
+        val request = Request.Builder()
+            .url(url)
+            .header("User-Agent", userAgentBrowser)
+            .apply {
+                if (!cookieHeader.isNullOrBlank()) header("Cookie", cookieHeader)
+            }
+            .build()
+
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw Exception("Error al conectar con Facebook (HTTP ${response.code})")
+
+            val html = response.body?.string() ?: throw Exception("Respuesta vacía de Facebook")
+
+            val hdPattern = Pattern.compile("hd_src_no_ratelimit:\"(https:[^\"]+)\"|hd_src:\"(https:[^\"]+)\"")
+            val sdPattern = Pattern.compile("sd_src_no_ratelimit:\"(https:[^\"]+)\"|sd_src:\"(https:[^\"]+)\"")
+
+            val hdMatcher = hdPattern.matcher(html)
+            val sdMatcher = sdPattern.matcher(html)
+
+            val hdUrl = if (hdMatcher.find()) (hdMatcher.group(1) ?: hdMatcher.group(2)) else null
+            val sdUrl = if (sdMatcher.find()) (sdMatcher.group(1) ?: sdMatcher.group(2)) else null
+
+            val formats = mutableListOf<FormatOption>()
+            if (!hdUrl.isNullOrBlank()) {
+                formats.add(
+                    FormatOption(
+                        formatId = "fb_hd",
+                        ext = "mp4",
+                        resolution = "HD (1080p / 720p)",
+                        height = 1080,
+                        isNative = true,
+                        filesizeApprox = 25 * 1024 * 1024L,
+                        streamUrl = hdUrl.replace("\\/", "/")
+                    )
+                )
+            }
+
+            if (!sdUrl.isNullOrBlank()) {
+                formats.add(
+                    FormatOption(
+                        formatId = "fb_sd",
+                        ext = "mp4",
+                        resolution = "SD (480p / 360p)",
+                        height = 480,
+                        isNative = true,
+                        filesizeApprox = 10 * 1024 * 1024L,
+                        streamUrl = sdUrl.replace("\\/", "/")
+                    )
+                )
+            }
+
+            if (formats.isEmpty()) {
+                throw Exception("No se pudo extraer el enlace de video de Facebook. Podría ser un grupo privado.")
+            }
+
+            return MediaInfo(
+                url = url,
+                title = "Facebook Video",
+                platform = Platform.FACEBOOK,
+                uploader = "Facebook User",
+                formats = formats
             )
-        )
-        return MediaInfo(
-            url = url,
-            title = "Facebook Video",
-            platform = Platform.FACEBOOK,
-            uploader = "Facebook Watch",
-            formats = formats
-        )
+        }
     }
 
+    // ==========================================
+    // REDDIT EXTRACTOR (.json endpoint)
+    // ==========================================
     private fun extractReddit(url: String, cookieHeader: String?): MediaInfo {
-        Timber.tag("MediaVaultDownload").d("Extrayendo video de Reddit...")
-        val formats = listOf(
-            FormatOption(
-                formatId = "rd_1080p",
-                ext = "mp4",
-                resolution = "1080p FHD",
-                height = 1080,
-                isNative = true,
-                filesizeApprox = 25 * 1024 * 1024L,
-                streamUrl = url
-            ),
-            FormatOption(
-                formatId = "rd_720p",
-                ext = "mp4",
-                resolution = "720p HD",
-                height = 720,
-                isNative = true,
-                filesizeApprox = 15 * 1024 * 1024L,
-                streamUrl = url
-            ),
-            FormatOption(
-                formatId = "rd_audio",
-                ext = "mp3",
-                isAudioOnly = true,
-                isNative = true,
-                filesizeApprox = 4 * 1024 * 1024L,
-                streamUrl = url
+        Timber.tag("MediaVaultDebug").d("Extrayendo video de Reddit...")
+        val cleanUrl = if (url.contains("?")) url.substring(0, url.indexOf("?")) else url
+        val jsonUrl = if (cleanUrl.endsWith("/")) "${cleanUrl.dropLast(1)}.json" else "$cleanUrl.json"
+
+        val request = Request.Builder()
+            .url(jsonUrl)
+            .header("User-Agent", userAgentBrowser)
+            .build()
+
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw Exception("Error al consultar post de Reddit (HTTP ${response.code})")
+
+            val body = response.body?.string() ?: throw Exception("Respuesta vacía de Reddit")
+            val array = gson.fromJson(body, com.google.gson.JsonArray::class.java)
+
+            val postData = array[0].asJsonObject
+                .getAsJsonObject("data")
+                .getAsJsonArray("children")[0].asJsonObject
+                .getAsJsonObject("data")
+
+            val title = postData.get("title")?.asString ?: "Reddit Video"
+            val author = postData.get("author")?.asString ?: "Reddit User"
+            val subreddit = postData.get("subreddit_name_prefixed")?.asString ?: "r/reddit"
+            val thumbnail = postData.get("thumbnail")?.asString
+            val duration = 0L
+
+            val media = postData.getAsJsonObject("media")
+            val redditVideo = media?.getAsJsonObject("reddit_video")
+                ?: postData.getAsJsonObject("secure_media")?.getAsJsonObject("reddit_video")
+                ?: throw Exception("Este post de Reddit no contiene un video nativo alojado en Reddit.")
+
+            val fallbackUrl = redditVideo.get("fallback_url")?.asString
+                ?: throw Exception("No se encontró URL de stream en el post de Reddit.")
+            val height = redditVideo.get("height")?.asInt ?: 720
+            val hlsUrl = redditVideo.get("hls_url")?.asString
+
+            val formats = mutableListOf<FormatOption>()
+
+            formats.add(
+                FormatOption(
+                    formatId = "rd_${height}p",
+                    ext = "mp4",
+                    resolution = "${height}p HD (Reddit)",
+                    height = height,
+                    isNative = true,
+                    filesizeApprox = 15 * 1024 * 1024L,
+                    streamUrl = fallbackUrl
+                )
             )
-        )
-        return MediaInfo(
-            url = url,
-            title = "Reddit Media Post",
-            platform = Platform.REDDIT,
-            uploader = "u/redditor",
-            formats = formats
-        )
+
+            if (!hlsUrl.isNullOrBlank()) {
+                formats.add(
+                    FormatOption(
+                        formatId = "rd_hls",
+                        ext = "m3u8",
+                        resolution = "HLS Stream Completo (Audio+Video)",
+                        height = height,
+                        isNative = true,
+                        filesizeApprox = 20 * 1024 * 1024L,
+                        streamUrl = hlsUrl
+                    )
+                )
+            }
+
+            formats.add(
+                FormatOption(
+                    formatId = "rd_audio",
+                    ext = "mp3",
+                    resolution = null,
+                    isAudioOnly = true,
+                    isNative = true,
+                    filesizeApprox = 4 * 1024 * 1024L,
+                    streamUrl = fallbackUrl
+                )
+            )
+
+            return MediaInfo(
+                url = url,
+                title = title,
+                thumbnailUrl = thumbnail,
+                duration = duration,
+                platform = Platform.REDDIT,
+                uploader = "$author ($subreddit)",
+                formats = formats
+            )
+        }
     }
 
+    // ==========================================
+    // VIMEO EXTRACTOR (/config API)
+    // ==========================================
     private fun extractVimeo(url: String, cookieHeader: String?): MediaInfo {
-        Timber.tag("MediaVaultDownload").d("Extrayendo video de Vimeo...")
-        val formats = listOf(
-            FormatOption(
-                formatId = "vm_1080p",
-                ext = "mp4",
-                resolution = "1080p FHD",
-                height = 1080,
-                isNative = true,
-                filesizeApprox = 50 * 1024 * 1024L,
-                streamUrl = url
-            ),
-            FormatOption(
-                formatId = "vm_720p",
-                ext = "mp4",
-                resolution = "720p HD",
-                height = 720,
-                isNative = true,
-                filesizeApprox = 25 * 1024 * 1024L,
-                streamUrl = url
+        Timber.tag("MediaVaultDebug").d("Extrayendo video de Vimeo...")
+        val pattern = Pattern.compile("vimeo\\.com/(?:channels/(?:\\w+/)?|groups/[^/]+/videos/|album/\\d+/video/|video/|)(\\d+)")
+        val matcher = pattern.matcher(url)
+        val videoId = if (matcher.find()) matcher.group(1) else throw Exception("ID de Vimeo no encontrado.")
+
+        val configUrl = "https://player.vimeo.com/video/$videoId/config"
+        val request = Request.Builder()
+            .url(configUrl)
+            .header("User-Agent", userAgentBrowser)
+            .build()
+
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw Exception("Error al consultar video de Vimeo (HTTP ${response.code})")
+
+            val body = response.body?.string() ?: throw Exception("Respuesta vacía de Vimeo")
+            val json = gson.fromJson(body, JsonObject::class.java)
+
+            val videoObj = json.getAsJsonObject("video")
+            val title = videoObj?.get("title")?.asString ?: "Vimeo Video ($videoId)"
+            val author = videoObj?.getAsJsonObject("owner")?.get("name")?.asString ?: "Vimeo Creator"
+            val duration = videoObj?.get("duration")?.asLong ?: 0L
+            val thumbnail = json.getAsJsonObject("video")?.getAsJsonObject("thumbs")?.get("base")?.asString
+
+            val files = json.getAsJsonObject("request")?.getAsJsonObject("files")
+            val progressive = files?.getAsJsonArray("progressive")
+
+            val formats = mutableListOf<FormatOption>()
+            if (progressive != null && progressive.size() > 0) {
+                for (item in progressive) {
+                    val obj = item.asJsonObject
+                    val streamUrl = obj.get("url")?.asString ?: continue
+                    val quality = obj.get("quality")?.asString ?: "HD"
+                    val height = when (quality) {
+                        "1080p" -> 1080
+                        "720p" -> 720
+                        "540p" -> 540
+                        "360p" -> 360
+                        else -> 720
+                    }
+
+                    formats.add(
+                        FormatOption(
+                            formatId = "vm_$quality",
+                            ext = "mp4",
+                            resolution = "$quality (Vimeo)",
+                            height = height,
+                            isNative = true,
+                            filesizeApprox = 25 * 1024 * 1024L,
+                            streamUrl = streamUrl
+                        )
+                    )
+                }
+            }
+
+            if (formats.isEmpty()) {
+                throw Exception("No se encontraron streams MP4 progresivos disponibles en este video de Vimeo.")
+            }
+
+            return MediaInfo(
+                url = url,
+                title = title,
+                thumbnailUrl = thumbnail,
+                duration = duration,
+                platform = Platform.VIMEO,
+                uploader = author,
+                formats = formats.sortedByDescending { it.height ?: 0 }
             )
-        )
-        return MediaInfo(
-            url = url,
-            title = "Vimeo Video",
-            platform = Platform.VIMEO,
-            uploader = "Vimeo Creator",
-            formats = formats
-        )
+        }
     }
 
+    // ==========================================
+    // SOUNDCLOUD EXTRACTOR
+    // ==========================================
     private fun extractSoundCloud(url: String, cookieHeader: String?): MediaInfo {
-        Timber.tag("MediaVaultDownload").d("Extrayendo audio de SoundCloud...")
+        Timber.tag("MediaVaultDebug").d("Extrayendo track de SoundCloud...")
         val formats = listOf(
             FormatOption(
                 formatId = "sc_hq",
@@ -522,7 +879,7 @@ class UniversalMediaExtractor @Inject constructor(
                 abr = 320f,
                 isAudioOnly = true,
                 isNative = true,
-                filesizeApprox = 9 * 1024 * 1024L,
+                filesizeApprox = 8 * 1024 * 1024L,
                 streamUrl = url
             )
         )
@@ -535,14 +892,20 @@ class UniversalMediaExtractor @Inject constructor(
         )
     }
 
+    // ==========================================
+    // GENERIC / DIRECT STREAM
+    // ==========================================
     private fun extractGenericOrDirect(url: String, cookieHeader: String?): MediaInfo {
-        Timber.tag("MediaVaultDownload").d("Extrayendo enlace directo / genérico: $url")
-        val isAudio = url.endsWith(".mp3") || url.endsWith(".m4a") || url.endsWith(".ogg") || url.endsWith(".flac")
+        Timber.tag("MediaVaultDebug").d("Extrayendo enlace directo / genérico: $url")
+        val lower = url.lowercase()
+        val isAudio = lower.endsWith(".mp3") || lower.endsWith(".m4a") || lower.endsWith(".ogg") || lower.endsWith(".flac") || lower.endsWith(".wav")
+        val isHls = lower.contains(".m3u8")
+
         val formats = listOf(
             FormatOption(
-                formatId = if (isAudio) "direct_audio" else "direct_video",
-                ext = if (isAudio) "mp3" else "mp4",
-                resolution = if (isAudio) null else "1080p (Directo)",
+                formatId = if (isAudio) "direct_audio" else if (isHls) "direct_hls_stream" else "direct_video",
+                ext = if (isAudio) "mp3" else if (isHls) "m3u8" else "mp4",
+                resolution = if (isAudio) null else if (isHls) "HLS Live/VOD Stream (.m3u8)" else "Enlace Directo",
                 isAudioOnly = isAudio,
                 isNative = true,
                 filesizeApprox = 20 * 1024 * 1024L,
@@ -557,69 +920,15 @@ class UniversalMediaExtractor @Inject constructor(
         )
     }
 
-    private fun generateFallbackMediaInfo(url: String, platform: Platform, errorReason: String?): MediaInfo {
-        Timber.tag("MediaVaultDownload").w("Generando fallback con calidades nativas para $platform")
-        val formats = listOf(
-            FormatOption(
-                formatId = "best_native_1080p",
-                ext = "mp4",
-                resolution = "1080p FHD (Nativo)",
-                fps = 60f,
-                height = 1080,
-                width = 1920,
-                isNative = true,
-                filesizeApprox = 45 * 1024 * 1024L,
-                streamUrl = url
-            ),
-            FormatOption(
-                formatId = "native_720p",
-                ext = "mp4",
-                resolution = "720p HD",
-                fps = 30f,
-                height = 720,
-                width = 1280,
-                isNative = true,
-                filesizeApprox = 22 * 1024 * 1024L,
-                streamUrl = url
-            ),
-            FormatOption(
-                formatId = "native_480p",
-                ext = "mp4",
-                resolution = "480p SD",
-                fps = 30f,
-                height = 480,
-                width = 854,
-                isNative = true,
-                filesizeApprox = 12 * 1024 * 1024L,
-                streamUrl = url
-            ),
-            FormatOption(
-                formatId = "audio_only_mp3",
-                ext = "mp3",
-                isAudioOnly = true,
-                isNative = true,
-                filesizeApprox = 6 * 1024 * 1024L,
-                streamUrl = url
-            )
-        )
-        return MediaInfo(
-            url = url,
-            title = "Video ${platform.name.lowercase().replaceFirstChar { it.uppercase() }}",
-            platform = platform,
-            uploader = "Autor",
-            formats = formats
-        )
-    }
-
     private fun extractYouTubeId(url: String): String? {
-        val pattern = "(?<=watch\\?v=|/videos/|embed/|youtu.be/|/v/|/e/|watch\\?v%3D|watch\\?feature=player_embedded&v=|%2Fvideos%2F|embed%\u200C\u200B2F|youtu.be%2F|%2Fv%2F)[^#&?\\n]*"
+        val pattern = "(?<=watch\\?v=|/videos/|embed/|youtu.be/|/v/|/e/|watch\\?v%3D|watch\\?feature=player_embedded&v=|%2Fvideos%2F|embed%E2%80%8C%E2%80%8B2F|youtu.be%2F|%2Fv%2F|shorts/)[^#&?\\n/]*"
         val compiled = Pattern.compile(pattern)
         val matcher = compiled.matcher(url)
         return if (matcher.find()) matcher.group() else null
     }
 
     private fun extractTwitterId(url: String): String? {
-        val pattern = "(?:twitter\\.com|x\\.com)/[^/]+/status/([0-9]+)"
+        val pattern = "(?:twitter\\.com|x\\.com|vxtwitter\\.com|fxtwitter\\.com)/[^/]+/status/([0-9]+)"
         val compiled = Pattern.compile(pattern)
         val matcher = compiled.matcher(url)
         return if (matcher.find()) matcher.group(1) else null
