@@ -266,6 +266,7 @@ class DownloadWorker @AssistedInject constructor(
                             Timber.tag(TAG).d("Paso 6: Descarga de bytes finalizada con éxito (${targetFile.length()} bytes)")
                         }
                     } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
                         if (attempts >= 2) throw e
                         Timber.tag(TAG).w("Error en intento $attempts: ${e.message}. Reintentando con refresco de stream...")
                     }
@@ -335,6 +336,7 @@ class DownloadWorker @AssistedInject constructor(
             Result.success()
 
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             val errorMsg = e.message ?: "Error desconocido durante la descarga"
             Timber.tag(TAG).e(e, "Error crítico en DownloadWorker para $url: $errorMsg")
 

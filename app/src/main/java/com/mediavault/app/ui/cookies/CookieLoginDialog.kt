@@ -101,8 +101,20 @@ fun CookieLoginDialog(
                                 settings.savePassword = false
                                 settings.saveFormData = false
                                 settings.mediaPlaybackRequiresUserGesture = true
+                                
+                                // Configuración de vista de escritorio para evitar degradación a versiones sin CSS/JS
+                                settings.useWideViewPort = true
+                                settings.loadWithOverviewMode = true
+                                settings.setSupportZoom(true)
+                                settings.builtInZoomControls = true
+                                settings.displayZoomControls = false
                                 settings.userAgentString =
                                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+
+                                // Habilitar soporte de Autocompletado del sistema (Google Password Manager / Autofill Framework)
+                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                                    importantForAutofill = android.view.View.IMPORTANT_FOR_AUTOFILL_YES
+                                }
                                 
                                 webChromeClient = object : WebChromeClient() {
                                     override fun onReceivedTitle(view: WebView?, title: String?) {

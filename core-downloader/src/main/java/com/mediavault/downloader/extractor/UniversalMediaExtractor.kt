@@ -83,6 +83,7 @@ class UniversalMediaExtractor @Inject constructor(
                     return@withContext mediaInfo
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 Timber.tag("MediaVaultDebug").w("Extractor especializado de $platform falló: ${e.message}. Activando respaldo con Modo Universal...")
             }
         }
@@ -106,6 +107,7 @@ class UniversalMediaExtractor @Inject constructor(
         try {
             return@withContext extractWithUniversalSniffer(resolvedUrl, cookieHeader, platform)
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             Timber.tag("MediaVaultUniversalMode").e(e, "Modo Universal finalizó con error para $resolvedUrl: ${e.message}")
             throw e
         }

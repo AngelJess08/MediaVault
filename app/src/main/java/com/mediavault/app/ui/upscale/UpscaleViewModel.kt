@@ -94,6 +94,7 @@ class UpscaleViewModel @Inject constructor(
                     )
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 _uiState.update {
                     it.copy(
                         isSubmitting = false,

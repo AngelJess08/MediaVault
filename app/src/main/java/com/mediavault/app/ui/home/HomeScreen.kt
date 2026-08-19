@@ -156,6 +156,7 @@ fun HomeScreen(
                                 }
                                 Button(
                                     onClick = { viewModel.applyDetectedClipboardUrl() },
+                                    enabled = !uiState.isLoading,
                                     shape = RoundedCornerShape(10.dp),
                                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                                 ) {
@@ -215,6 +216,7 @@ fun HomeScreen(
                             ) {
                                 Button(
                                     onClick = { viewModel.pasteFromClipboard() },
+                                    enabled = !uiState.isLoading,
                                     modifier = Modifier.weight(1f),
                                     shape = RoundedCornerShape(12.dp)
                                 ) {

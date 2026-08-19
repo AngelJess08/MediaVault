@@ -121,6 +121,7 @@ class UpscaleWorker @AssistedInject constructor(
             Result.success(workDataOf("resultUri" to (savedUri?.toString() ?: "")))
 
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             e.printStackTrace()
             updateJobStatus(jobDbId, "FAILED", 0f, null, null, e.message)
             notificationManager.notify(

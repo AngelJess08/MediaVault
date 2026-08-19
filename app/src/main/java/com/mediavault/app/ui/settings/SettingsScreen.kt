@@ -338,18 +338,19 @@ fun SettingsScreen(
 
             // SECCIÓN: COOKIES Y ACCESO A REDES SOCIALES
             item {
-                SettingsSectionTitle("Sesiones y Cookies (Twitter/X, Instagram, etc.)")
+                SettingsSectionTitle("Sesiones y Cookies de Plataformas")
             }
 
             item {
                 SettingsCard {
                     Text(
-                        "Inicia sesión directamente para descargar contenido restringido o privado sin exportar archivos manualmente:",
+                        "Inicia sesión directamente para descargar contenido restringido o de cuentas seguidas en redes sociales:",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(modifier = Modifier.height(10.dp))
 
+                    // Fila 1: Twitter / X e Instagram
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -372,25 +373,79 @@ fun SettingsScreen(
 
                     Spacer(modifier = Modifier.height(6.dp))
 
+                    // Fila 2: Facebook y TikTok
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         OutlinedButton(
-                            onClick = { webViewLoginTarget = "https://m.facebook.com/login.php" to "Facebook" },
+                            onClick = { webViewLoginTarget = "https://www.facebook.com/login" to "Facebook" },
                             modifier = Modifier.weight(1f),
                             shape = RoundedCornerShape(10.dp)
                         ) {
                             Text("Facebook", style = MaterialTheme.typography.labelSmall)
                         }
                         OutlinedButton(
-                            onClick = { webViewLoginTarget = "https://accounts.google.com/ServiceLogin?service=youtube" to "YouTube" },
+                            onClick = { webViewLoginTarget = "https://www.tiktok.com/login/phone-or-email/email" to "TikTok" },
                             modifier = Modifier.weight(1f),
                             shape = RoundedCornerShape(10.dp)
                         ) {
-                            Text("YouTube", style = MaterialTheme.typography.labelSmall)
+                            Text("TikTok", style = MaterialTheme.typography.labelSmall)
                         }
                     }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    // Fila 3: Reddit y Vimeo
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = { webViewLoginTarget = "https://www.reddit.com/login/" to "Reddit" },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text("Reddit", style = MaterialTheme.typography.labelSmall)
+                        }
+                        OutlinedButton(
+                            onClick = { webViewLoginTarget = "https://vimeo.com/log_in" to "Vimeo" },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text("Vimeo", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    // Fila 4: Twitch y Pinterest
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = { webViewLoginTarget = "https://www.twitch.tv/login" to "Twitch" },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text("Twitch", style = MaterialTheme.typography.labelSmall)
+                        }
+                        OutlinedButton(
+                            onClick = { webViewLoginTarget = "https://www.pinterest.com/login/" to "Pinterest" },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text("Pinterest", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        "Nota sobre YouTube: YouTube opera con contenido público sin requerir inicio de sesión. Google bloquea estrictamente los inicios de sesión dentro de vistas web integradas por su política de protección anti-phishing.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                    )
 
                     HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp))
 

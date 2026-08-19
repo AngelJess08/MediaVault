@@ -199,6 +199,7 @@ class SettingsViewModel @Inject constructor(
                     }
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 Timber.tag("MediaVaultDebug").e(e, "Error al probar sesión de $platform")
                 withContext(Dispatchers.Main) {
                     onResult(false, "Error de red al conectar: ${e.message}")

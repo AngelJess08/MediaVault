@@ -134,6 +134,7 @@ class UniversalWebViewSniffer @Inject constructor(
         } catch (e: TimeoutCancellationException) {
             Timber.tag(TAG).d("Tiempo de espera del sniffer concluido (${timeoutSeconds}s). Evaluando candidatos recolectados...")
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             Timber.tag(TAG).w("Aviso durante la ejecución del WebView: ${e.message}")
         } finally {
             destroyWebView(webView)

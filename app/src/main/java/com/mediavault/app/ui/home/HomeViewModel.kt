@@ -104,6 +104,7 @@ class HomeViewModel @Inject constructor(
                 }
             }
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             Timber.tag("MediaVaultDebug").w("No se pudo leer portapapeles: ${e.message}")
         }
     }
@@ -227,6 +228,7 @@ class HomeViewModel @Inject constructor(
                 Timber.tag("MediaVaultDebug").d("Calidad seleccionada: ${highestNativeFormat?.resolution}, Aviso de audio-only: $warning")
 
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 val errorMsg = e.message ?: "Error al conectar con la plataforma"
                 val isLoginReq = errorMsg.contains("Login requerido", ignoreCase = true) ||
                         errorMsg.contains("401") || errorMsg.contains("403") ||
@@ -269,6 +271,7 @@ class HomeViewModel @Inject constructor(
                 Timber.tag("MediaVaultDebug").d("Enlace fallido reportado y guardado localmente: $url")
                 _uiState.update { it.copy(showSuccessMessage = "Enlace reportado localmente para depuración.") }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 Timber.tag("MediaVaultDebug").e(e, "Error al guardar reporte de enlace")
             }
         }
@@ -377,6 +380,7 @@ class HomeViewModel @Inject constructor(
                     )
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 Timber.tag("MediaVaultDebug").e(e, "Error al encolar descarga")
                 _uiState.update { it.copy(errorMessage = "Error al iniciar descarga: ${e.message}") }
             }
@@ -391,24 +395,30 @@ class HomeViewModel @Inject constructor(
         if (urls.isEmpty()) return
 
         viewModelScope.launch {
-            for (u in urls) {
-                val platform = platformDetector.detect(u)
-                downloadRepository.enqueueDownload(
-                    url = u,
-                    title = "Lote ${platform.name} - ${u.takeLast(8)}",
-                    platform = platform,
-                    formatId = "best",
-                    quality = "1080p",
-                    wifiOnly = _uiState.value.wifiOnly,
-                    speedLimitKbps = _uiState.value.speedLimitKbps
-                )
-            }
-            _uiState.update {
-                it.copy(
-                    batchUrlsText = "",
-                    isBatchMode = false,
-                    showSuccessMessage = "${urls.size} descargas encoladas exitosamente"
-                )
+            try {
+                for (u in urls) {
+                    val platform = platformDetector.detect(u)
+                    downloadRepository.enqueueDownload(
+                        url = u,
+                        title = "Lote ${platform.name} - ${u.takeLast(8)}",
+                        platform = platform,
+                        formatId = "best",
+                        quality = "1080p",
+                        wifiOnly = _uiState.value.wifiOnly,
+                        speedLimitKbps = _uiState.value.speedLimitKbps
+                    )
+                }
+                _uiState.update {
+                    it.copy(
+                        batchUrlsText = "",
+                        isBatchMode = false,
+                        showSuccessMessage = "${urls.size} descargas encoladas exitosamente"
+                    )
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                Timber.tag("MediaVaultDebug").e(e, "Error al procesar lote")
+                _uiState.update { it.copy(errorMessage = "Error en lote: ${e.message}") }
             }
         }
     }
