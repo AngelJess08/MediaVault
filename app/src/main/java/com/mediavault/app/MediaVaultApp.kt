@@ -15,8 +15,9 @@ class MediaVaultApp : Application(), Configuration.Provider {
 
     override fun onCreate() {
         super.onCreate()
+        com.mediavault.app.util.GlobalCrashHandler.install(this)
         Timber.plant(Timber.DebugTree())
-        Timber.tag("MediaVaultDownload").d("MediaVault Application inicializada correctamente con Hilt y WorkManager")
+        Timber.tag("MediaVaultDownload").d("MediaVault Application inicializada correctamente con Hilt, WorkManager y GlobalCrashHandler")
     }
 
     override val workManagerConfiguration: Configuration

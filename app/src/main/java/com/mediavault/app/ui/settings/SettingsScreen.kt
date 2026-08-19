@@ -24,6 +24,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavHostController
+import com.mediavault.app.service.ClipboardMonitorService
+import com.mediavault.app.service.FloatingBubbleService
 import com.mediavault.app.ui.cookies.CookieLoginDialog
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -39,6 +41,8 @@ fun SettingsScreen(
     var showApiKeyDialog by remember { mutableStateOf(false) }
     var showEndpointDialog by remember { mutableStateOf(false) }
     var showImportCookiesDialog by remember { mutableStateOf(false) }
+    var showOverlayPermissionDialog by remember { mutableStateOf(false) }
+    var showDiagnosticDialog by remember { mutableStateOf(false) }
     var tempApiKey by remember { mutableStateOf("") }
     var tempEndpoint by remember { mutableStateOf("") }
     var tempCookiesText by remember { mutableStateOf("") }
@@ -186,6 +190,8 @@ fun SettingsScreen(
                 }
             }
 
+            // Oculto temporalmente mientras se estabiliza el flujo de descarga principal — reactivar en BottomNavBar.kt y SettingsScreen.kt
+            /*
             // SECCIÓN: MODO NAVEGADOR (OPCIONAL / SECUNDARIO)
             item {
                 SettingsSectionTitle("Navegación Web Integrada (Opcional)")
@@ -249,6 +255,86 @@ fun SettingsScreen(
                     }
                 }
             }
+            */
+
+            // SECCIÓN: MODO BURBUJA FLOTANTE (DESCARGA RÁPIDA)
+            item {
+                SettingsSectionTitle("Modo Burbuja Flotante y Portapapeles")
+            }
+
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (settings.isFloatingBubbleEnabled)
+                            MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.25f)
+                        else
+                            MaterialTheme.colorScheme.surface
+                    ),
+                    border = if (settings.isFloatingBubbleEnabled)
+                        CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.secondary.copy(alpha = 0.4f)))
+                    else null
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.Outlined.ContentPaste,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.secondary,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column {
+                                    Text(
+                                        "Burbuja de Descarga Rápida",
+                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                                    )
+                                    Text(
+                                        "Muestra una burbuja flotante al copiar un enlace de video/audio",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            Switch(
+                                checked = settings.isFloatingBubbleEnabled,
+                                onCheckedChange = { enabled ->
+                                    if (enabled) {
+                                        if (android.provider.Settings.canDrawOverlays(context)) {
+                                            viewModel.updateIsFloatingBubbleEnabled(true)
+                                            ClipboardMonitorService.start(context)
+                                            Toast.makeText(context, "Modo Burbuja activado", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            showOverlayPermissionDialog = true
+                                        }
+                                    } else {
+                                        viewModel.updateIsFloatingBubbleEnabled(false)
+                                        ClipboardMonitorService.stop(context)
+                                        FloatingBubbleService.stop(context)
+                                        Toast.makeText(context, "Modo Burbuja desactivado", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            "Privacidad Garantizada: El monitor solo inspecciona enlaces que coincidan con plataformas de video/audio. Jamás guarda, registra ni transmite ningún otro texto de tu portapapeles.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                        )
+                    }
+                }
+            }
 
             // SECCIÓN: COOKIES Y ACCESO A REDES SOCIALES
             item {
@@ -269,7 +355,7 @@ fun SettingsScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         OutlinedButton(
-                            onClick = { webViewLoginTarget = "https://x.com/login" to "Twitter / X" },
+                            onClick = { webViewLoginTarget = "https://twitter.com/i/flow/login" to "Twitter / X" },
                             modifier = Modifier.weight(1f),
                             shape = RoundedCornerShape(10.dp)
                         ) {
@@ -291,14 +377,14 @@ fun SettingsScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         OutlinedButton(
-                            onClick = { webViewLoginTarget = "https://m.facebook.com/login/" to "Facebook" },
+                            onClick = { webViewLoginTarget = "https://m.facebook.com/login.php" to "Facebook" },
                             modifier = Modifier.weight(1f),
                             shape = RoundedCornerShape(10.dp)
                         ) {
                             Text("Facebook", style = MaterialTheme.typography.labelSmall)
                         }
                         OutlinedButton(
-                            onClick = { webViewLoginTarget = "https://accounts.google.com/" to "YouTube" },
+                            onClick = { webViewLoginTarget = "https://accounts.google.com/ServiceLogin?service=youtube" to "YouTube" },
                             modifier = Modifier.weight(1f),
                             shape = RoundedCornerShape(10.dp)
                         ) {
@@ -491,6 +577,24 @@ fun SettingsScreen(
                 }
             }
 
+            // SECCIÓN: DIAGNÓSTICO Y SOPORTE TÉCNICO
+            item {
+                SettingsSectionTitle("Diagnóstico y Soporte Técnico")
+            }
+
+            item {
+                SettingsCard {
+                    SettingsClickableItem(
+                        icon = Icons.Outlined.BugReport,
+                        title = "Registros de Error y Crashes",
+                        subtitle = "Ver y copiar archivos de diagnóstico de caídas de la app",
+                        onClick = {
+                            showDiagnosticDialog = true
+                        }
+                    )
+                }
+            }
+
             item {
                 Spacer(modifier = Modifier.height(30.dp))
             }
@@ -617,6 +721,158 @@ fun SettingsScreen(
             dismissButton = {
                 TextButton(onClick = { showEndpointDialog = false }) {
                     Text("Cancelar")
+                }
+            }
+        )
+    }
+
+    // Diálogo de Justificación y Solicitud de Permiso de Superposición (Burbuja Flotante)
+    if (showOverlayPermissionDialog) {
+        AlertDialog(
+            onDismissRequest = { showOverlayPermissionDialog = false },
+            icon = { Icon(Icons.Outlined.ContentPaste, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+            title = { Text("Permiso de Superposición Requerido") },
+            text = {
+                Text(
+                    "Para mostrar la burbuja de descarga rápida sobre otras aplicaciones cuando copias un enlace, MediaVault necesita el permiso 'Mostrar sobre otras apps'.\n\n" +
+                            "• Privacidad: La app únicamente evalúa si el texto copiado es un enlace multimedia.\n" +
+                            "• Jamás se registra, almacena ni comparte tu portapapeles personal.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showOverlayPermissionDialog = false
+                        try {
+                            val intent = android.content.Intent(
+                                android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                android.net.Uri.parse("package:${context.packageName}")
+                            )
+                            context.startActivity(intent)
+                        } catch (e: Exception) {
+                            val fallbackIntent = android.content.Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
+                            context.startActivity(fallbackIntent)
+                        }
+                    }
+                ) {
+                    Text("Abrir Ajustes")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showOverlayPermissionDialog = false }) {
+                    Text("Cancelar")
+                }
+            }
+        )
+    }
+
+    // Diálogo de Diagnóstico y Crash Logs
+    if (showDiagnosticDialog) {
+        val crashLogs = remember { com.mediavault.app.util.GlobalCrashHandler.getCrashLogs(context) }
+        var selectedCrashContent by remember { mutableStateOf<String?>(null) }
+
+        AlertDialog(
+            onDismissRequest = {
+                selectedCrashContent = null
+                showDiagnosticDialog = false
+            },
+            icon = { Icon(Icons.Outlined.BugReport, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+            title = { Text(if (selectedCrashContent == null) "Diagnóstico de Errores" else "Detalle del Crash") },
+            text = {
+                if (selectedCrashContent != null) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        OutlinedTextField(
+                            value = selectedCrashContent!!,
+                            onValueChange = {},
+                            readOnly = true,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(300.dp),
+                            textStyle = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                } else if (crashLogs.isEmpty()) {
+                    Text(
+                        "No se han registrado caídas ni errores no capturados. La aplicación está operando con normalidad.",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(280.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(crashLogs) { file ->
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceVariant,
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        selectedCrashContent = file.readText()
+                                    }
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(file.name, style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
+                                        Text("${file.length()} bytes", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                    Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                if (selectedCrashContent != null) {
+                    Row {
+                        TextButton(onClick = {
+                            val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Crash Log", selectedCrashContent))
+                            Toast.makeText(context, "Log copiado al portapapeles", Toast.LENGTH_SHORT).show()
+                        }) {
+                            Text("Copiar")
+                        }
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Button(onClick = {
+                            val sendIntent = android.content.Intent().apply {
+                                action = android.content.Intent.ACTION_SEND
+                                putExtra(android.content.Intent.EXTRA_TEXT, selectedCrashContent)
+                                type = "text/plain"
+                            }
+                            context.startActivity(android.content.Intent.createChooser(sendIntent, "Compartir reporte de error"))
+                        }) {
+                            Text("Compartir")
+                        }
+                    }
+                } else {
+                    Button(onClick = { showDiagnosticDialog = false }) {
+                        Text("Cerrar")
+                    }
+                }
+            },
+            dismissButton = {
+                if (selectedCrashContent != null) {
+                    TextButton(onClick = { selectedCrashContent = null }) {
+                        Text("Volver a Lista")
+                    }
+                } else if (crashLogs.isNotEmpty()) {
+                    TextButton(onClick = {
+                        com.mediavault.app.util.GlobalCrashHandler.clearCrashLogs(context)
+                        Toast.makeText(context, "Logs eliminados", Toast.LENGTH_SHORT).show()
+                        showDiagnosticDialog = false
+                    }) {
+                        Text("Borrar Todo")
+                    }
                 }
             }
         )

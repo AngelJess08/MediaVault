@@ -34,6 +34,13 @@ class UniversalMediaExtractor @Inject constructor(
         .followSslRedirects(true)
         .build()
 
+    private val fastInstanceClient = OkHttpClient.Builder()
+        .connectTimeout(3500, TimeUnit.MILLISECONDS)
+        .readTimeout(3500, TimeUnit.MILLISECONDS)
+        .followRedirects(true)
+        .followSslRedirects(true)
+        .build()
+
     private val userAgentBrowser =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
     private val userAgentMobile =
@@ -69,7 +76,7 @@ class UniversalMediaExtractor @Inject constructor(
                 }
 
                 if (mediaInfo != null && mediaInfo.formats.isNotEmpty()) {
-                    Timber.tag("MediaVaultDebug").d("Paso 4: Extracción especializada exitosa. Título: '${mediaInfo.title}', Formatos: ${mediaInfo.formats.size}")
+                    Timber.tag("MediaVaultDebug").d("Paso 4: Extracción especializada exitosa. Título: '${mediaInfo.title}', Formatos: ${mediaInfo.formats.size}, Resuelto por: ${mediaInfo.resolvedByInstance ?: "Nativo"}")
                     mediaInfo.formats.forEach { fmt ->
                         Timber.tag("MediaVaultDebug").d("   -> Formato: ${fmt.resolution ?: fmt.formatId} (${fmt.ext}), Stream: ${fmt.streamUrl?.take(60)}...")
                     }
@@ -131,12 +138,13 @@ class UniversalMediaExtractor @Inject constructor(
             title = title,
             platform = if (platform != Platform.UNKNOWN) platform else Platform.GENERIC,
             uploader = author,
-            formats = formats
+            formats = formats,
+            resolvedByInstance = "Universal WebView Sniffer"
         )
     }
 
     // ==========================================
-    // YOUTUBE EXTRACTOR (Piped / Cobalt / Invidious / oEmbed)
+    // YOUTUBE EXTRACTOR (Piped / Invidious / Cobalt / oEmbed)
     // ==========================================
     private fun extractYouTube(url: String, cookieHeader: String?): MediaInfo {
         val videoId = extractYouTubeId(url) ?: throw Exception("No se pudo identificar el ID del video de YouTube.")
@@ -147,12 +155,13 @@ class UniversalMediaExtractor @Inject constructor(
         var thumbnail = "https://img.youtube.com/vi/$videoId/maxresdefault.jpg"
         var duration = 0L
         val formats = mutableListOf<FormatOption>()
+        var successfulInstance: String? = null
 
-        // 1. Obtener metadata de oEmbed
+        // 1. Obtener metadata básica de oEmbed
         try {
             val oembedUrl = "https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=$videoId&format=json"
             val request = Request.Builder().url(oembedUrl).header("User-Agent", userAgentBrowser).build()
-            client.newCall(request).execute().use { response ->
+            fastInstanceClient.newCall(request).execute().use { response ->
                 if (response.isSuccessful) {
                     val body = response.body?.string()
                     if (!body.isNullOrBlank()) {
@@ -167,32 +176,54 @@ class UniversalMediaExtractor @Inject constructor(
             Timber.tag("MediaVaultDebug").w("oEmbed fallback: ${e.message}")
         }
 
-        // 2. Intentar consultar Piped / Invidious API para obtener streams directos de googlevideo.com
+        // 2. Pool de instancias públicas activas de Piped e Invidious (TeamPiped docs / instances.invidious.io)
         val pipedInstances = listOf(
+            "https://piped-api.privacy.com.de/streams/$videoId",
             "https://pipedapi.kavin.rocks/streams/$videoId",
-            "https://api.piped.privacy.com.de/streams/$videoId",
+            "https://api.piped.projectsegfau.lt/streams/$videoId",
+            "https://pipedapi.in.projectsegfau.lt/streams/$videoId",
+            "https://pipedapi.leptons.xyz/streams/$videoId",
             "https://pipedapi.tokhmi.xyz/streams/$videoId",
-            "https://yewtu.be/api/v1/videos/$videoId"
+            "https://piped-api.garudalinux.org/streams/$videoId",
+            "https://pipedapi.ducks.party/streams/$videoId",
+            "https://pipedapi.r4fo.com/streams/$videoId",
+            "https://inv.tux.pizza/api/v1/videos/$videoId",
+            "https://invidious.nerdvpn.de/api/v1/videos/$videoId",
+            "https://invidious.drgns.space/api/v1/videos/$videoId",
+            "https://invidious.no-valis.be/api/v1/videos/$videoId",
+            "https://yewtu.be/api/v1/videos/$videoId",
+            "https://vid.puffyan.us/api/v1/videos/$videoId",
+            "https://invidious.lunar.icu/api/v1/videos/$videoId"
         )
 
         for (pipedUrl in pipedInstances) {
             try {
-                Timber.tag("MediaVaultDebug").d("Consultando API de stream YouTube: $pipedUrl")
+                Timber.tag("MediaVaultDebug").d("Consultando API de stream YouTube: $pipedUrl (Timeout 3.5s)...")
                 val request = Request.Builder()
                     .url(pipedUrl)
                     .header("User-Agent", userAgentBrowser)
                     .build()
 
-                client.newCall(request).execute().use { response ->
+                fastInstanceClient.newCall(request).execute().use { response ->
                     if (response.isSuccessful) {
                         val body = response.body?.string()
                         if (!body.isNullOrBlank()) {
-                            val json = gson.fromJson(body, JsonObject::class.java)
+                            val parsedElement = try {
+                                com.google.gson.JsonParser.parseString(body)
+                            } catch (e: Exception) {
+                                null
+                            }
+                            if (parsedElement == null || !parsedElement.isJsonObject) {
+                                Timber.tag("MediaVaultDebug").w("Respuesta de $pipedUrl no es un objeto JSON válido.")
+                                return@use
+                            }
+                            val json = parsedElement.asJsonObject
                             title = json.get("title")?.asString ?: title
-                            author = json.get("uploader")?.asString ?: author
-                            duration = json.get("duration")?.asLong ?: duration
+                            author = json.get("uploader")?.asString ?: json.get("author")?.asString ?: author
+                            duration = json.get("duration")?.asLong ?: json.get("lengthSeconds")?.asLong ?: duration
                             thumbnail = json.get("thumbnailUrl")?.asString ?: thumbnail
 
+                            // 2.1 Streams de Piped (videoStreams y audioStreams)
                             val videoStreams = json.getAsJsonArray("videoStreams")
                             val audioStreams = json.getAsJsonArray("audioStreams")
 
@@ -246,24 +277,53 @@ class UniversalMediaExtractor @Inject constructor(
                                 }
                             }
 
+                            // 2.2 Streams de Invidious (formatStreams y adaptiveFormats)
+                            val formatStreams = json.getAsJsonArray("formatStreams")
+                            if (formatStreams != null && formatStreams.size() > 0) {
+                                for (elem in formatStreams) {
+                                    val obj = elem.asJsonObject
+                                    val streamUrl = obj.get("url")?.asString ?: continue
+                                    val resolution = obj.get("resolution")?.asString ?: obj.get("qualityLabel")?.asString ?: "720p"
+                                    val container = obj.get("container")?.asString ?: "mp4"
+                                    val size = obj.get("size")?.asLong ?: (15 * 1024 * 1024L)
+
+                                    formats.add(
+                                        FormatOption(
+                                            formatId = "invidious_${resolution}_${container}",
+                                            ext = if (container.contains("mp4", ignoreCase = true)) "mp4" else "webm",
+                                            resolution = "$resolution ($container)",
+                                            isNative = true,
+                                            filesizeApprox = size,
+                                            streamUrl = streamUrl
+                                        )
+                                    )
+                                }
+                            }
+
                             if (formats.isNotEmpty()) {
-                                Timber.tag("MediaVaultDebug").d("Streams de YouTube obtenidos con éxito de $pipedUrl (${formats.size} formatos)")
+                                successfulInstance = pipedUrl
+                                Timber.tag("MediaVaultDebug").i("Streams de YouTube obtenidos con éxito de $pipedUrl (${formats.size} formatos)")
                             }
                         }
+                    } else {
+                        Timber.tag("MediaVaultDebug").w("Instancia $pipedUrl respondió con HTTP ${response.code}")
                     }
                 }
                 if (formats.isNotEmpty()) {
                     break
                 }
             } catch (e: Exception) {
-                Timber.tag("MediaVaultDebug").w("Error en instancia $pipedUrl: ${e.message}")
+                Timber.tag("MediaVaultDebug").w("Instancia $pipedUrl falló o expiró timeout: ${e.message}")
             }
         }
 
         // 3. Fallback con Cobalt API
+        // NOTA DE SEGURIDAD / ARQUITECTURA: La instancia pública api.cobalt.tools NO es viable de forma directa
+        // debido a protecciones anti-bot Turnstile y bloqueos activos de YouTube durante 2026.
+        // Se recomienda autohospedar una instancia de Cobalt en server-backend (imputnet/cobalt).
         if (formats.isEmpty()) {
             try {
-                Timber.tag("MediaVaultDebug").d("Consultando Cobalt API para YouTube...")
+                Timber.tag("MediaVaultDebug").d("Intentando Cobalt API de respaldo...")
                 val cobaltJson = JsonObject().apply {
                     addProperty("url", "https://www.youtube.com/watch?v=$videoId")
                     addProperty("videoQuality", "max")
@@ -277,13 +337,14 @@ class UniversalMediaExtractor @Inject constructor(
                     .post(body)
                     .build()
 
-                client.newCall(request).execute().use { response ->
+                fastInstanceClient.newCall(request).execute().use { response ->
                     if (response.isSuccessful) {
                         val respBody = response.body?.string()
                         if (!respBody.isNullOrBlank()) {
                             val json = gson.fromJson(respBody, JsonObject::class.java)
                             val streamUrl = json.get("url")?.asString
                             if (!streamUrl.isNullOrBlank()) {
+                                successfulInstance = "https://api.cobalt.tools (Cobalt Fallback)"
                                 formats.add(
                                     FormatOption(
                                         formatId = "yt_cobalt_max",
@@ -299,12 +360,12 @@ class UniversalMediaExtractor @Inject constructor(
                     }
                 }
             } catch (e: Exception) {
-                Timber.tag("MediaVaultDebug").w("Cobalt API fallo para YouTube: ${e.message}")
+                Timber.tag("MediaVaultDebug").w("Cobalt API pública no disponible: ${e.message}")
             }
         }
 
         if (formats.isEmpty()) {
-            throw Exception("No se pudieron resolver los streams directos de YouTube. Verifique la conexión.")
+            throw Exception("No se pudieron resolver los streams directos de YouTube a través de las instancias activas. Se activará Modo Universal.")
         }
 
         return MediaInfo(
@@ -314,7 +375,8 @@ class UniversalMediaExtractor @Inject constructor(
             duration = duration,
             platform = Platform.YOUTUBE,
             uploader = author,
-            formats = formats.sortedByDescending { it.height ?: 0 }
+            formats = formats.sortedByDescending { it.height ?: 0 },
+            resolvedByInstance = successfulInstance
         )
     }
 

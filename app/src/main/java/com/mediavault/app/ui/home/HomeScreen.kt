@@ -481,6 +481,44 @@ fun HomeScreen(
                 }
             }
 
+            // AVISO VISIBLE: SOLO SE DETECTÓ AUDIO PARA UN VIDEO
+            uiState.audioOnlyWarning?.let { warning ->
+                item {
+                    Surface(
+                        color = MaterialTheme.colorScheme.tertiaryContainer,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Filled.MusicNote, contentDescription = null, tint = MaterialTheme.colorScheme.tertiary)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Aviso de Contenido",
+                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = warning,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                TextButton(onClick = { viewModel.dismissAudioOnlyWarning() }) {
+                                    Text("Aceptar y Continuar")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Información de Medios y Selector Dinámico de Formatos Nativos
             uiState.mediaInfo?.let { info ->
                 item {

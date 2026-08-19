@@ -139,10 +139,18 @@ class UniversalWebViewSniffer @Inject constructor(
             destroyWebView(webView)
         }
 
+        // Filtrar candidatos dudosos (analíticas o catch-all que no tienen stream concreto)
+        val validCandidates = candidates.filter { candidate ->
+            val hasConcreteExtension = candidate.isHls || candidate.isDash ||
+                    candidate.extension in listOf("mp4", "webm", "mkv", "mov", "m4v", "ts", "mp3", "m4a", "aac", "ogg", "flac", "wav", "opus")
+            val isNotHeuristicWithoutLength = !candidate.isHeuristicAcceptHeader || (candidate.contentLength != null && candidate.contentLength > 200 * 1024L)
+            hasConcreteExtension && isNotHeuristicWithoutLength
+        }
+
         // Si tenemos candidatos válidos, asignamos título y ordenamos por calidad
-        if (candidates.isNotEmpty()) {
-            Timber.tag(TAG).d("Modo Universal exitoso: ${candidates.size} candidato(s) encontrado(s).")
-            return@withContext candidates.map { it.copy(title = pageTitle) }
+        if (validCandidates.isNotEmpty()) {
+            Timber.tag(TAG).d("Modo Universal exitoso: ${validCandidates.size} candidato(s) válido(s) encontrado(s).")
+            return@withContext validCandidates.map { it.copy(title = pageTitle) }
                 .sortedWith(
                     compareByDescending<SnifferCandidate> { it.isHls || it.isDash }
                         .thenByDescending { it.contentLength ?: 0L }
@@ -155,8 +163,8 @@ class UniversalWebViewSniffer @Inject constructor(
             throw DrmProtectedException("Este contenido está protegido por cifrado digital (DRM Widevine/PlayReady) y no se puede descargar.")
         }
 
-        if (detectedBlobMse) {
-            throw BlobMseUnsupportedException("Este sitio usa un reproductor (Media Source / blob:) que fragmenta el video en memoria vía JavaScript y no se puede extraer directamente.")
+        if (detectedBlobMse || candidates.any { it.isHeuristicAcceptHeader }) {
+            throw BlobMseUnsupportedException("No se pudo obtener el video real de esta página, probablemente usa reproducción fragmentada no compatible (Media Source / DASH en memoria).")
         }
 
         throw NoMediaFoundException("No se pudo encontrar un video reproducible en esta página.")
@@ -414,9 +422,15 @@ class UniversalWebViewSniffer @Inject constructor(
             return
         }
 
-        // 8. Headers HTTP y Content-Type
+        // 8. Headers HTTP y Content-Type (Restringido para evitar tracking/analítica)
         val acceptHeader = headers?.get("Accept")?.lowercase() ?: ""
         if (acceptHeader.contains("video/") || acceptHeader.contains("audio/")) {
+            // Descartar si el dominio o URL es de analítica, telemetría o tracking
+            if (adAndMalwareFilter.shouldBlock(url) || isTrackingOrAnalyticsUrl(lowerUrl)) {
+                Timber.tag(TAG).d("Petición con header multimedia descartada por ser tracking/analítica: $url")
+                return
+            }
+
             val isAudio = acceptHeader.contains("audio/")
             onCandidateFound(
                 SnifferCandidate(
@@ -427,10 +441,21 @@ class UniversalWebViewSniffer @Inject constructor(
                     isDash = false,
                     isAudioOnly = isAudio,
                     estimatedResolution = if (isAudio) "Audio Web" else "Video Web",
-                    headers = headers ?: emptyMap()
+                    headers = headers ?: emptyMap(),
+                    isHeuristicAcceptHeader = true
                 )
             )
         }
+    }
+
+    private fun isTrackingOrAnalyticsUrl(lowerUrl: String): Boolean {
+        return lowerUrl.contains("gen_204") || lowerUrl.contains("ptracking") ||
+                lowerUrl.contains("stats") || lowerUrl.contains("telemetry") ||
+                lowerUrl.contains("analytics") || lowerUrl.contains("beacon") ||
+                lowerUrl.contains("pixel") || lowerUrl.contains("doubleclick") ||
+                lowerUrl.contains("google-analytics") || lowerUrl.contains("facebook.com/tr") ||
+                lowerUrl.contains("logger") || lowerUrl.contains("collect?") ||
+                lowerUrl.contains("/log?") || lowerUrl.contains("metrics")
     }
 
     private fun estimateResolutionFromUrl(url: String): String {

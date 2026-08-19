@@ -53,7 +53,8 @@ data class HomeUiState(
     val showSuccessMessage: String? = null,
     val duplicateExistingDownload: DownloadEntity? = null,
     val detectedClipboardUrl: String? = null,
-    val isBrowserModeEnabled: Boolean = false
+    val isBrowserModeEnabled: Boolean = false,
+    val audioOnlyWarning: String? = null
 )
 
 @HiltViewModel
@@ -197,11 +198,18 @@ class HomeViewModel @Inject constructor(
 
                 // AUTO-SELECCIÓN DE CALIDAD NATIVA MÁS ALTA POR DEFECTO
                 val videoFormats = info.formats.filter { !it.isAudioOnly }
+                val isVideoPlatform = info.platform != Platform.SOUNDCLOUD && info.platform != Platform.GENERIC && info.platform != Platform.UNKNOWN
+                val hasOnlyAudioForVideo = videoFormats.isEmpty() && info.formats.isNotEmpty() && isVideoPlatform
+
                 val highestNativeFormat = videoFormats.sortedWith(
                     compareByDescending<FormatOption> { it.height ?: 0 }
                         .thenByDescending { it.fps ?: 0f }
                         .thenByDescending { it.filesizeApprox ?: 0L }
                 ).firstOrNull() ?: info.formats.firstOrNull()
+
+                val warning = if (hasOnlyAudioForVideo) {
+                    "Solo se pudo detectar audio para este video, no el video completo."
+                } else null
 
                 _uiState.update {
                     it.copy(
@@ -212,10 +220,11 @@ class HomeViewModel @Inject constructor(
                         detectedPlatform = info.platform,
                         selectedFormatId = highestNativeFormat?.formatId ?: "best",
                         selectedResolution = highestNativeFormat?.resolution ?: "1080p",
-                        isAudioOnly = highestNativeFormat?.isAudioOnly ?: false
+                        isAudioOnly = highestNativeFormat?.isAudioOnly ?: false,
+                        audioOnlyWarning = warning
                     )
                 }
-                Timber.tag("MediaVaultDebug").d("Calidad nativa más alta preseleccionada: ${highestNativeFormat?.resolution}")
+                Timber.tag("MediaVaultDebug").d("Calidad seleccionada: ${highestNativeFormat?.resolution}, Aviso de audio-only: $warning")
 
             } catch (e: Exception) {
                 val errorMsg = e.message ?: "Error al conectar con la plataforma"
@@ -245,6 +254,10 @@ class HomeViewModel @Inject constructor(
                 }
             }
         }
+    }
+
+    fun dismissAudioOnlyWarning() {
+        _uiState.update { it.copy(audioOnlyWarning = null) }
     }
 
     fun reportFailedLink(url: String, error: String) {

@@ -251,4 +251,10 @@ class SettingsViewModel @Inject constructor(
             settingsDataStore.updateIsBrowserModeEnabled(enabled)
         }
     }
+
+    fun updateIsFloatingBubbleEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsDataStore.updateIsFloatingBubbleEnabled(enabled)
+        }
+    }
 }

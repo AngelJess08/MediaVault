@@ -87,8 +87,14 @@ fun CookieLoginDialog(
                     AndroidView(
                         factory = { ctx ->
                             WebView(ctx).apply {
+                                val cookieManager = CookieManager.getInstance()
+                                cookieManager.setAcceptCookie(true)
+                                cookieManager.setAcceptThirdPartyCookies(this, true)
+
                                 settings.javaScriptEnabled = true
                                 settings.domStorageEnabled = true
+                                settings.databaseEnabled = true
+                                settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
                                 settings.allowFileAccess = false
                                 settings.allowContentAccess = false
                                 settings.setGeolocationEnabled(false)
@@ -96,7 +102,7 @@ fun CookieLoginDialog(
                                 settings.saveFormData = false
                                 settings.mediaPlaybackRequiresUserGesture = true
                                 settings.userAgentString =
-                                    "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
+                                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
                                 
                                 webChromeClient = object : WebChromeClient() {
                                     override fun onReceivedTitle(view: WebView?, title: String?) {

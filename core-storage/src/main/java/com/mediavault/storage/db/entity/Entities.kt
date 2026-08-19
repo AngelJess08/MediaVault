@@ -25,7 +25,9 @@ data class DownloadEntity(
     val audioBitrate: String? = null,
     val videoResolution: String? = null,
     val videoFps: Int? = null,
-    val author: String? = null
+    val author: String? = null,
+    val resolvedByInstance: String? = null,
+    val isWatched: Boolean = false
 )
 
 @Entity(tableName = "queue_items")

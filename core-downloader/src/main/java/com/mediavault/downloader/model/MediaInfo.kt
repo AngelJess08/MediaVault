@@ -13,7 +13,8 @@ data class MediaInfo(
     val playlistItems: List<PlaylistItem>? = null,
     val formats: List<FormatOption> = emptyList(),
     val subtitles: List<SubtitleTrack> = emptyList(),
-    val isLive: Boolean = false
+    val isLive: Boolean = false,
+    val resolvedByInstance: String? = null
 )
 
 data class FormatOption(

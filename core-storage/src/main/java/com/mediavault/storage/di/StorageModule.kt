@@ -27,7 +27,7 @@ object StorageModule {
             context,
             AppDatabase::class.java,
             "mediavault_db"
-        ).build()
+        ).fallbackToDestructiveMigration().build()
     }
 
     @Provides

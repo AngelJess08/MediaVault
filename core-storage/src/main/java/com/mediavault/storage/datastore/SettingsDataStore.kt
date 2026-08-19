@@ -40,7 +40,8 @@ data class Settings(
     val defaultAudioBitrate: String = "320k",
     val scheduledDownloadTime: String = "02:00",
     val appIconStyle: String = "default",
-    val isBrowserModeEnabled: Boolean = false
+    val isBrowserModeEnabled: Boolean = false,
+    val isFloatingBubbleEnabled: Boolean = false
 )
 
 @Singleton
@@ -78,7 +79,8 @@ class SettingsDataStore @Inject constructor(
             defaultAudioBitrate = preferences[DEFAULT_AUDIO_B] ?: "320k",
             scheduledDownloadTime = preferences[SCHEDULED_TIME] ?: "02:00",
             appIconStyle = preferences[APP_ICON_STYLE] ?: "default",
-            isBrowserModeEnabled = preferences[BROWSER_MODE_ENABLED] ?: false
+            isBrowserModeEnabled = preferences[BROWSER_MODE_ENABLED] ?: false,
+            isFloatingBubbleEnabled = preferences[FLOATING_BUBBLE_ENABLED] ?: false
         )
     }
 
@@ -107,6 +109,7 @@ class SettingsDataStore @Inject constructor(
     suspend fun updateScheduledDownloadTime(value: String) = update(SCHEDULED_TIME, value)
     suspend fun updateAppIconStyle(value: String) = update(APP_ICON_STYLE, value)
     suspend fun updateIsBrowserModeEnabled(value: Boolean) = update(BROWSER_MODE_ENABLED, value)
+    suspend fun updateIsFloatingBubbleEnabled(value: Boolean) = update(FLOATING_BUBBLE_ENABLED, value)
     
     private suspend fun <T> update(key: Preferences.Key<T>, value: T) {
         dataStore.edit { it[key] = value }
@@ -141,5 +144,6 @@ class SettingsDataStore @Inject constructor(
         val SCHEDULED_TIME = stringPreferencesKey("scheduled_time")
         val APP_ICON_STYLE = stringPreferencesKey("app_icon_style")
         val BROWSER_MODE_ENABLED = booleanPreferencesKey("browser_mode_enabled")
+        val FLOATING_BUBBLE_ENABLED = booleanPreferencesKey("floating_bubble_enabled")
     }
 }

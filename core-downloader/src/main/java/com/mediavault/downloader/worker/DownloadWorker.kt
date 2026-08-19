@@ -323,7 +323,8 @@ class DownloadWorker @AssistedInject constructor(
                 status = "COMPLETED",
                 duration = mediaInfo.duration.coerceAtLeast(30L),
                 author = mediaInfo.uploader,
-                videoResolution = selectedFormat?.resolution
+                videoResolution = selectedFormat?.resolution,
+                resolvedByInstance = mediaInfo.resolvedByInstance
             )
             downloadDao.insert(downloadEntity)
 

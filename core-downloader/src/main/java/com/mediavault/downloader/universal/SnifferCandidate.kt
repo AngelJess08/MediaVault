@@ -14,5 +14,6 @@ data class SnifferCandidate(
     val isAudioOnly: Boolean = false,
     val estimatedResolution: String? = null,
     val title: String? = null,
-    val headers: Map<String, String> = emptyMap()
+    val headers: Map<String, String> = emptyMap(),
+    val isHeuristicAcceptHeader: Boolean = false
 )

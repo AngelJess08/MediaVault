@@ -32,9 +32,12 @@ fun BottomNavBar(
             Triple(Screen.Home, "Inicio", Icons.Filled.Home to Icons.Outlined.Home)
         )
 
+        // Oculto temporalmente mientras se estabiliza el flujo de descarga principal — reactivar en BottomNavBar.kt y SettingsScreen.kt
+        /*
         if (isBrowserModeEnabled) {
             items.add(Triple(Screen.Browser, "Navegador", Icons.Filled.Language to Icons.Outlined.Language))
         }
+        */
 
         items.addAll(
             listOf(
